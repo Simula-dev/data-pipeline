@@ -1,0 +1,31 @@
+# dbt connection profile for Snowflake.
+# In production, credentials are injected via environment variables
+# sourced from AWS SSM Parameter Store at container startup.
+# Do NOT commit real credentials here.
+
+data_pipeline:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: TRANSFORMER
+      database: DATA_PIPELINE
+      warehouse: TRANSFORM_WH
+      schema: raw
+      threads: 4
+      client_session_keep_alive: false
+
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: TRANSFORMER
+      database: DATA_PIPELINE
+      warehouse: TRANSFORM_WH
+      schema: raw
+      threads: 8
+      client_session_keep_alive: false

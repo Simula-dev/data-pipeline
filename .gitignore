@@ -1,0 +1,32 @@
+# CDK
+cdk.out/
+.cdk.staging/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
+# ML
+ml/output/
+*.pkl
+*.joblib
+
+# Secrets — never commit these
+.env
+*.pem
+credentials.json
+
+# OS
+.DS_Store
+Thumbs.db
