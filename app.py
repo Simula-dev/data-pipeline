@@ -9,6 +9,7 @@ from cdk.stacks.ingestion_stack import IngestionStack
 from cdk.stacks.compute_stack import ComputeStack
 from cdk.stacks.stepfunctions_stack import StepFunctionsStack
 from cdk.stacks.monitoring_stack import MonitoringStack
+from cdk.stacks.datasync_stack import DataSyncStack
 
 app = cdk.App()
 
@@ -20,6 +21,13 @@ env = cdk.Environment(
 ingestion = IngestionStack(app, "DataPipeline-Ingestion", env=env)
 compute = ComputeStack(app, "DataPipeline-Compute", env=env)
 monitoring = MonitoringStack(app, "DataPipeline-Monitoring", env=env)
+
+datasync = DataSyncStack(
+    app,
+    "DataPipeline-DataSync",
+    raw_bucket=ingestion.raw_bucket,
+    env=env,
+)
 
 StepFunctionsStack(
     app,

@@ -1,0 +1,9 @@
+{
+  "source_name": "jsonplaceholder_posts",
+  "base_url": "https://jsonplaceholder.typicode.com",
+  "endpoint": "/posts",
+  "method": "GET",
+  "auth_type": "none",
+  "pagination_type": "none",
+  "records_json_path": ""
+}

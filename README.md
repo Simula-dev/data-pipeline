@@ -2,6 +2,19 @@
 
 AWS CDK data pipeline — S3 → Snowflake → dbt → SageMaker, orchestrated by Step Functions.
 
+> **Setup instructions:** see [SETUP.md](SETUP.md) for installing Python, Node, CDK, AWS CLI, and running tests.
+
+## Build status
+
+| Step | Status | Module |
+|---|---|---|
+| 1. Ingest (HTTP + DataSync) | ✅ Complete | `lambdas/ingest/`, `cdk/stacks/datasync_stack.py` |
+| 2. Load to Snowflake | ⬜ Stub | `lambdas/load/` |
+| 3. dbt Transformation | ⬜ Scaffolded | `dbt/` |
+| 4. ML Inference (SageMaker) | ⬜ Placeholder | `ml/`, `cdk/stacks/stepfunctions_stack.py` |
+| 5. Data Quality Gate | ⬜ Stub | `lambdas/quality_gate/` |
+| 6. Notify + Finalize | ⬜ Basic | `cdk/stacks/monitoring_stack.py` |
+
 ## Stack
 
 | Layer | Technology |

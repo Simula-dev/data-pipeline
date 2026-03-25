@@ -1,0 +1,22 @@
+{
+  "source_name": "github_trending_repos",
+  "base_url": "https://api.github.com",
+  "endpoint": "/search/repositories",
+  "method": "GET",
+  "auth_type": "bearer",
+  "auth_secret_ssm": "/data-pipeline/secrets/github_token",
+  "query_params": {
+    "q": "language:python",
+    "sort": "stars",
+    "order": "desc"
+  },
+  "headers": {
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+  },
+  "pagination_type": "page",
+  "page_size": 100,
+  "max_pages": 5,
+  "records_json_path": "items",
+  "requests_per_second": 1.0
+}

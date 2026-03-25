@@ -1,0 +1,17 @@
+{
+  "source_name": "coingecko_top_coins",
+  "base_url": "https://api.coingecko.com",
+  "endpoint": "/api/v3/coins/markets",
+  "method": "GET",
+  "auth_type": "none",
+  "query_params": {
+    "vs_currency": "usd",
+    "order": "market_cap_desc",
+    "per_page": 100
+  },
+  "pagination_type": "page",
+  "page_size": 100,
+  "max_pages": 3,
+  "records_json_path": "",
+  "requests_per_second": 0.5
+}
