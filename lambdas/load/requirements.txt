@@ -1,0 +1,3 @@
+# Snowflake connector \u2014 bundled via CDK Docker bundling (Linux x86_64).
+# Pinned to a version with prebuilt manylinux wheels to keep bundling fast.
+snowflake-connector-python==3.12.3

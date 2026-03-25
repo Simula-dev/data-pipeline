@@ -67,7 +67,21 @@ Bootstrap CDK in your account (one-time per account/region):
 cdk bootstrap aws://123456789012/us-east-1
 ```
 
-## 4. Store secrets in SSM Parameter Store
+## 4. Set up Snowflake
+
+Run the SQL scripts in `sql/setup/` in order. Full instructions in
+[`sql/setup/README.md`](sql/setup/README.md). High level:
+
+1. `01_database_warehouse.sql` — creates DB, warehouse, roles, service user
+2. Deploy `DataPipeline-Ingestion` stack first so you have the IAM role ARN:
+   `cdk deploy DataPipeline-Ingestion`
+3. `02_storage_integration.sql` — create S3 storage integration, paste the CDK outputs
+4. Update the IAM role trust policy with Snowflake's IAM user + external ID
+   (full commands in `sql/setup/README.md`)
+5. `03_file_format_stage.sql` — create NDJSON file format and external stage
+6. `04_raw_table.sql` — create the `RAW.LANDING` table and audit view
+
+## 5. Store secrets in SSM Parameter Store
 
 Snowflake (used by Steps 2, 3, 5):
 ```bash
@@ -84,7 +98,7 @@ Any API keys your ingest sources need:
 aws ssm put-parameter --name /data-pipeline/secrets/my_api_token --value "..." --type SecureString
 ```
 
-## 5. Deploy
+## 6. Deploy
 
 ```bash
 # Synth to validate
@@ -99,7 +113,7 @@ Or deploy a single stack during development:
 cdk deploy DataPipeline-Ingestion
 ```
 
-## 6. Run tests
+## 7. Run tests
 
 ```bash
 pytest tests/ -v
@@ -107,7 +121,7 @@ pytest tests/ -v
 
 Expected output: all tests pass (config, S3 writer, HTTP client).
 
-## 7. Trigger a pipeline run
+## 8. Trigger a pipeline run
 
 ```bash
 aws stepfunctions start-execution \

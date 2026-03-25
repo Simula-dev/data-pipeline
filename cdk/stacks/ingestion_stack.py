@@ -8,7 +8,9 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_lambda as _lambda,
     aws_iam as iam,
+    BundlingOptions,
     RemovalPolicy,
+    CfnOutput,
 )
 from constructs import Construct
 
@@ -77,19 +79,70 @@ class IngestionStack(Stack):
         )
 
         # --- Lambda: load S3 data into Snowflake (COPY INTO) ---
+        # Bundled in Docker because snowflake-connector-python has C extensions
+        # that must be compiled for Lambda's Linux x86_64 runtime.
         self.load_function = _lambda.Function(
             self,
             "LoadFunction",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset("lambdas/load"),
+            code=_lambda.Code.from_asset(
+                "lambdas/load",
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        (
+                            "pip install --no-cache-dir -r requirements.txt "
+                            "-t /asset-output && "
+                            "cp -au . /asset-output"
+                        ),
+                    ],
+                ),
+            ),
             role=lambda_role,
             timeout=Duration.minutes(10),
-            memory_size=512,
+            memory_size=1024,
             environment={
                 "RAW_BUCKET": self.raw_bucket.bucket_name,
                 "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
+                "SNOWFLAKE_STAGE": "RAW.S3_RAW_STAGE",
+                "SNOWFLAKE_FILE_FORMAT": "RAW.NDJSON_FORMAT",
             },
+        )
+
+        # --- IAM role for Snowflake storage integration ---
+        # Snowflake assumes this role via STS to read from the raw bucket.
+        # After `cdk deploy`, run `DESC INTEGRATION S3_RAW_INTEGRATION` in
+        # Snowflake to get STORAGE_AWS_IAM_USER_ARN + STORAGE_AWS_EXTERNAL_ID,
+        # then update this role's trust policy via the AWS console or SDK.
+        self.snowflake_integration_role = iam.Role(
+            self,
+            "SnowflakeStorageIntegrationRole",
+            role_name="data-pipeline-snowflake-integration",
+            assumed_by=iam.AccountPrincipal(self.account),  # updated post-deploy
+            description="Assumed by Snowflake via STS to access the raw bucket",
+        )
+        self.raw_bucket.grant_read(self.snowflake_integration_role)
+        self.snowflake_integration_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetBucketLocation", "s3:ListBucket"],
+                resources=[self.raw_bucket.bucket_arn],
+            )
+        )
+
+        CfnOutput(
+            self,
+            "SnowflakeIntegrationRoleArn",
+            value=self.snowflake_integration_role.role_arn,
+            description="Paste into sql/setup/02_storage_integration.sql",
+        )
+        CfnOutput(
+            self,
+            "RawBucketName",
+            value=self.raw_bucket.bucket_name,
+            description="Raw S3 bucket name \u2014 used in stage URL",
         )
 
         # --- Lambda: data quality gate after dbt run ---

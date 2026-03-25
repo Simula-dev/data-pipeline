@@ -1,0 +1,5 @@
+{
+  "_comment": "Direct invocation payload for the load Lambda \u2014 useful for backfill or testing a specific S3 file without running the ingest step first.",
+  "source": "github_trending_repos",
+  "s3Key": "raw/github_trending_repos/2026/04/08/120000_abcdef0123456789.ndjson"
+}
