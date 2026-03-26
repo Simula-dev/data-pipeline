@@ -1,0 +1,49 @@
+version: 2
+
+models:
+  - name: dim_repos
+    description: "Dimension table: one row per GitHub repo with latest descriptive attributes."
+    columns:
+      - name: repo_id
+        description: "Primary key \u2014 GitHub numeric repository id."
+        tests:
+          - not_null
+          - unique
+      - name: owner_login
+        tests:
+          - not_null
+      - name: repo_name
+        tests:
+          - not_null
+      - name: dim_refreshed_at
+        description: "When this row was last refreshed from the staging layer."
+        tests:
+          - not_null
+
+  - name: fct_daily_repo_metrics
+    description: "Daily fact table of repo engagement metrics. Incremental."
+    columns:
+      - name: repo_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_repos')
+              field: repo_id
+      - name: metric_date
+        tests:
+          - not_null
+      - name: star_count
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: fork_count
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - repo_id
+            - metric_date

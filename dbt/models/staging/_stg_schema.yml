@@ -1,0 +1,59 @@
+version: 2
+
+models:
+  - name: stg_github_repos
+    description: "Typed view over GitHub /search/repositories results landed in RAW.LANDING."
+    columns:
+      - name: repo_id
+        description: "GitHub numeric repository id. Unique per (load_id, repo_id)."
+        tests:
+          - not_null
+      - name: owner_login
+        description: "GitHub username or org name of the repo owner."
+        tests:
+          - not_null
+      - name: star_count
+        description: "Stargazer count at ingest time."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: fork_count
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: repo_created_at
+        tests:
+          - not_null
+      - name: load_id
+        tests:
+          - not_null
+      - name: ingested_at
+        tests:
+          - not_null
+
+  - name: stg_coingecko_markets
+    description: "Typed view over CoinGecko /coins/markets results landed in RAW.LANDING."
+    columns:
+      - name: coin_id
+        description: "CoinGecko coin id (slug, e.g. 'bitcoin')."
+        tests:
+          - not_null
+      - name: symbol
+        tests:
+          - not_null
+      - name: current_price_usd
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: market_cap_rank
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 1
+      - name: load_id
+        tests:
+          - not_null
+      - name: ingested_at
+        tests:
+          - not_null

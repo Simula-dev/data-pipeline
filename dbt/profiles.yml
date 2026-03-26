@@ -1,31 +1,38 @@
 # dbt connection profile for Snowflake.
-# In production, credentials are injected via environment variables
-# sourced from AWS SSM Parameter Store at container startup.
+#
+# Credentials are injected as environment variables by the ECS task at
+# container start \u2014 ECS pulls them from SSM Parameter Store via the
+# `secrets` block in the task definition (see cdk/stacks/compute_stack.py).
+#
 # Do NOT commit real credentials here.
 
 data_pipeline:
-  target: dev
+  target: prod
   outputs:
-    dev:
-      type: snowflake
-      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
-      user: "{{ env_var('SNOWFLAKE_USER') }}"
-      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role: TRANSFORMER
-      database: DATA_PIPELINE
-      warehouse: TRANSFORM_WH
-      schema: raw
-      threads: 4
-      client_session_keep_alive: false
 
     prod:
       type: snowflake
-      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
-      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      account:  "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user:     "{{ env_var('SNOWFLAKE_USER') }}"
       password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role: TRANSFORMER
-      database: DATA_PIPELINE
-      warehouse: TRANSFORM_WH
-      schema: raw
+      role:      TRANSFORMER
+      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'DATA_PIPELINE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'TRANSFORM_WH') }}"
+      schema:    RAW           # default schema; overridden per-model via +schema
       threads: 8
       client_session_keep_alive: false
+      query_tag: "dbt-pipeline"
+
+    # Local dev target \u2014 used when running dbt from your workstation
+    dev:
+      type: snowflake
+      account:  "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user:     "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role:      TRANSFORMER
+      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'DATA_PIPELINE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'TRANSFORM_WH') }}"
+      schema:    RAW
+      threads: 4
+      client_session_keep_alive: false
+      query_tag: "dbt-dev-{{ env_var('USER', 'local') }}"

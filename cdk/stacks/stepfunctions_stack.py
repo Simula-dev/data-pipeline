@@ -12,6 +12,7 @@ from aws_cdk import (
     aws_stepfunctions as sfn,
     aws_stepfunctions_tasks as tasks,
     aws_ecs as ecs,
+    aws_ec2 as ec2,
     aws_lambda as _lambda,
     aws_sns as sns,
     aws_iam as iam,
@@ -62,6 +63,10 @@ class StepFunctionsStack(Stack):
         # ------------------------------------------------------------------ #
         #  STEP 3 — Run dbt transformations on Fargate                        #
         # ------------------------------------------------------------------ #
+        # `dbt build` runs sources freshness, seeds, models, and tests in
+        # correct dependency order. If any test fails, downstream models in
+        # the same DAG are skipped and the Fargate task exits non-zero,
+        # causing Step Functions to route to the failure notification.
         dbt_task = tasks.EcsRunTask(
             self,
             "RunDbtTransformation",
@@ -70,11 +75,18 @@ class StepFunctionsStack(Stack):
             launch_target=tasks.EcsFargateLaunchTarget(
                 platform_version=ecs.FargatePlatformVersion.LATEST
             ),
-            # Override command to also run dbt tests after models
+            subnets=ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ),
+            assign_public_ip=False,
             container_overrides=[
                 tasks.ContainerOverride(
                     container_definition=dbt_task_definition.default_container,
-                    command=["sh", "-c", "dbt run && dbt test"],
+                    command=[
+                        "dbt", "build",
+                        "--profiles-dir", "/app/dbt",
+                        "--target", "prod",
+                    ],
                 )
             ],
             result_path="$.dbtResult",

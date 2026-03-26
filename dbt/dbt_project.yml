@@ -5,25 +5,43 @@ config-version: 2
 profile: 'data_pipeline'
 
 model-paths: ["models"]
-analysis-paths: ["analyses"]
+macro-paths: ["macros"]
 test-paths: ["tests"]
 seed-paths: ["seeds"]
-macro-paths: ["macros"]
 snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
 
 target-path: "target"
 clean-targets:
   - "target"
   - "dbt_packages"
+  - "logs"
+
+# Require dbt 1.8 or higher
+require-dbt-version: ">=1.8.0"
 
 models:
   data_pipeline:
+    # Every subfolder here corresponds to a schema in Snowflake.
+    # The generate_schema_name macro override drops the default dbt prefix,
+    # so +schema: staging lands as the literal STAGING schema.
     staging:
       +schema: staging
       +materialized: view
+      +tags: ["layer:staging"]
+
     intermediate:
       +schema: intermediate
       +materialized: ephemeral
+      +tags: ["layer:intermediate"]
+
     marts:
       +schema: marts
       +materialized: table
+      +tags: ["layer:marts"]
+
+# Global variables available via {{ var('...') }}
+vars:
+  # Fail dbt if any source is older than this many hours
+  source_freshness_warn_hours: 12
+  source_freshness_error_hours: 48
