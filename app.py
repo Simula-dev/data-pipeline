@@ -10,6 +10,7 @@ from cdk.stacks.compute_stack import ComputeStack
 from cdk.stacks.stepfunctions_stack import StepFunctionsStack
 from cdk.stacks.monitoring_stack import MonitoringStack
 from cdk.stacks.datasync_stack import DataSyncStack
+from cdk.stacks.sagemaker_stack import SageMakerStack
 
 app = cdk.App()
 
@@ -29,15 +30,25 @@ datasync = DataSyncStack(
     env=env,
 )
 
+sagemaker_stack = SageMakerStack(
+    app,
+    "DataPipeline-SageMaker",
+    raw_bucket=ingestion.raw_bucket,
+    env=env,
+)
+
 StepFunctionsStack(
     app,
     "DataPipeline-Orchestration",
     ingest_function=ingestion.ingest_function,
     load_function=ingestion.load_function,
+    ml_export_function=ingestion.ml_export_function,
+    ml_load_function=ingestion.ml_load_function,
     quality_gate_function=ingestion.quality_gate_function,
     notify_topic=monitoring.notify_topic,
     dbt_cluster=compute.cluster,
     dbt_task_definition=compute.dbt_task_definition,
+    raw_bucket_name=ingestion.raw_bucket.bucket_name,
     env=env,
 )
 

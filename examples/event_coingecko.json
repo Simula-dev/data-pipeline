@@ -13,5 +13,6 @@
   "page_size": 100,
   "max_pages": 3,
   "records_json_path": "",
-  "requests_per_second": 0.5
+  "requests_per_second": 0.5,
+  "ml_enabled": false
 }

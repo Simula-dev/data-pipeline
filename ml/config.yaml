@@ -1,0 +1,34 @@
+# Training config for the ML model.
+#
+# Fill in the values below before running `scripts/train_sagemaker.py`.
+# The script reads this file and uses it to launch a SageMaker training job.
+
+# --- Data source ---
+# The dbt mart containing your labeled training data (one row per example).
+# Create this with a model under dbt/models/marts/ \u2014 see ml/README.md.
+training_table: "MARTS.ML_TRAINING_DATA"
+
+# Target column to predict. Must exist in training_table.
+target_column: "is_churned"
+
+# Task type drives the sklearn estimator used in train.py
+# Options: classification | regression
+task_type: "classification"
+
+# --- Model hyperparameters ---
+# (Passed to GradientBoostingClassifier/Regressor in train.py)
+n_estimators: 100
+max_depth: 3
+
+# --- Training job config ---
+# SageMaker training instance. ml.m5.large is sufficient for most tabular data.
+instance_type: "ml.m5.large"
+instance_count: 1
+max_runtime_seconds: 3600   # 1 hour
+
+# --- Model registration ---
+# Group to register the trained model under. Created if it doesn't exist.
+model_package_group_name: "data-pipeline-model"
+
+# Tag applied to the registered model version
+model_approval_status: "PendingManualApproval"  # or 'Approved' to auto-promote

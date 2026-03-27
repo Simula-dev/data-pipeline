@@ -145,6 +145,61 @@ class IngestionStack(Stack):
             description="Raw S3 bucket name \u2014 used in stage URL",
         )
 
+        # --- Lambda: ml_export \u2014 unload inference input to S3 as CSV ---
+        self.ml_export_function = _lambda.Function(
+            self,
+            "MLExportFunction",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="handler.lambda_handler",
+            code=_lambda.Code.from_asset(
+                "lambdas/ml_export",
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash", "-c",
+                        "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
+                        "cp -au . /asset-output",
+                    ],
+                ),
+            ),
+            role=lambda_role,
+            timeout=Duration.minutes(5),
+            memory_size=512,
+            environment={
+                "RAW_BUCKET": self.raw_bucket.bucket_name,
+                "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
+                "SNOWFLAKE_STAGE": "RAW.S3_RAW_STAGE",
+                "ML_INFERENCE_INPUT_TABLE": "MARTS.ML_INFERENCE_INPUT",
+            },
+        )
+
+        # --- Lambda: ml_load \u2014 COPY INTO MARTS.ML_PREDICTIONS ---
+        self.ml_load_function = _lambda.Function(
+            self,
+            "MLLoadFunction",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="handler.lambda_handler",
+            code=_lambda.Code.from_asset(
+                "lambdas/ml_load",
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash", "-c",
+                        "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
+                        "cp -au . /asset-output",
+                    ],
+                ),
+            ),
+            role=lambda_role,
+            timeout=Duration.minutes(5),
+            memory_size=512,
+            environment={
+                "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
+                "SNOWFLAKE_STAGE": "RAW.S3_RAW_STAGE",
+                "ML_PREDICTIONS_TABLE": "MARTS.ML_PREDICTIONS",
+            },
+        )
+
         # --- Lambda: data quality gate after dbt run ---
         self.quality_gate_function = _lambda.Function(
             self,
