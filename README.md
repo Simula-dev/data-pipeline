@@ -12,7 +12,7 @@ AWS CDK data pipeline — S3 → Snowflake → dbt → SageMaker, orchestrated b
 | 2. Load to Snowflake | ✅ Complete | `lambdas/load/`, `sql/setup/` |
 | 3. dbt Transformation | ✅ Complete | `dbt/`, `cdk/stacks/compute_stack.py` |
 | 4. ML Inference (SageMaker) | ✅ Complete | `ml/`, `lambdas/ml_export/`, `lambdas/ml_load/`, `cdk/stacks/sagemaker_stack.py` |
-| 5. Data Quality Gate | ⬜ Stub | `lambdas/quality_gate/` |
+| 5. Data Quality Gate | ✅ Complete | `lambdas/quality_gate/` |
 | 6. Notify + Finalize | ⬜ Basic | `cdk/stacks/monitoring_stack.py` |
 
 ## Stack

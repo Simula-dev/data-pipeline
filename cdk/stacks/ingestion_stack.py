@@ -206,12 +206,21 @@ class IngestionStack(Stack):
             "QualityGateFunction",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset("lambdas/quality_gate"),
+            code=_lambda.Code.from_asset(
+                "lambdas/quality_gate",
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash", "-c",
+                        "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
+                        "cp -au . /asset-output",
+                    ],
+                ),
+            ),
             role=lambda_role,
             timeout=Duration.minutes(5),
-            memory_size=256,
+            memory_size=512,
             environment={
                 "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
-                "QUALITY_THRESHOLD": "0.99",
             },
         )

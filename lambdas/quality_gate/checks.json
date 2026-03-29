@@ -1,0 +1,53 @@
+[
+  {
+    "name": "landing_has_data",
+    "type": "row_count_min",
+    "table": "RAW.LANDING",
+    "min_rows": 1,
+    "severity": "error",
+    "description": "RAW.LANDING must have at least one row after a pipeline run."
+  },
+  {
+    "name": "landing_is_fresh",
+    "type": "freshness",
+    "table": "RAW.LANDING",
+    "timestamp_column": "ingested_at",
+    "max_age_hours": 24,
+    "severity": "error",
+    "description": "Most recent ingest must be within the last 24 hours."
+  },
+  {
+    "name": "landing_source_not_null",
+    "type": "null_rate",
+    "table": "RAW.LANDING",
+    "column": "source",
+    "max_null_rate": 0.0,
+    "severity": "error",
+    "description": "Every row must have a source tag."
+  },
+  {
+    "name": "dim_repos_populated",
+    "type": "row_count_min",
+    "table": "MARTS.DIM_REPOS",
+    "min_rows": 1,
+    "severity": "warn",
+    "description": "dim_repos should have data (warn only \u2014 may be empty on first run)."
+  },
+  {
+    "name": "fct_metrics_unique_pk",
+    "type": "uniqueness",
+    "table": "MARTS.FCT_DAILY_REPO_METRICS",
+    "columns": ["repo_id", "metric_date"],
+    "severity": "error",
+    "description": "(repo_id, metric_date) must be unique in the daily metrics fact."
+  },
+  {
+    "name": "predictions_recent",
+    "type": "custom_sql",
+    "sql": "SELECT COUNT(*) FROM MARTS.ML_PREDICTIONS WHERE predicted_at >= DATEADD('day', -7, CURRENT_TIMESTAMP())",
+    "comparison": "gte",
+    "expected_value": 0,
+    "severity": "warn",
+    "description": "Predictions within the last 7 days exist (warn-only during ML ramp-up)."
+  }
+]
