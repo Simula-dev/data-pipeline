@@ -22,7 +22,6 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_ec2 as ec2,
     aws_lambda as _lambda,
-    aws_sns as sns,
     aws_logs as logs,
 )
 from constructs import Construct
@@ -38,7 +37,7 @@ class StepFunctionsStack(Stack):
         ml_export_function: _lambda.Function,
         ml_load_function: _lambda.Function,
         quality_gate_function: _lambda.Function,
-        notify_topic: sns.Topic,
+        notify_function: _lambda.Function,
         dbt_cluster: ecs.Cluster,
         dbt_task_definition: ecs.FargateTaskDefinition,
         raw_bucket_name: str,
@@ -156,24 +155,37 @@ class StepFunctionsStack(Stack):
         # ------------------------------------------------------------------ #
         #  STEP 6 \u2014 Notifications (success / failure terminals)               #
         # ------------------------------------------------------------------ #
-        notify_success = tasks.SnsPublish(
+        # Both terminals invoke the same notify Lambda with a different
+        # `status` field. The Lambda formats a human-readable message,
+        # publishes to SNS, and emits CloudWatch metrics via EMF.
+        notify_success = tasks.LambdaInvoke(
             self, "NotifySuccess",
-            topic=notify_topic,
-            message=sfn.TaskInput.from_object({
+            lambda_function=notify_function,
+            payload=sfn.TaskInput.from_object({
                 "status": "SUCCESS",
-                "pipeline": "data-pipeline",
-                "detail.$": "$",
+                "executionId.$": "$$.Execution.Name",
+                "executionArn.$": "$$.Execution.Id",
+                "startTime.$": "$$.Execution.StartTime",
+                "stateMachineName.$": "$$.StateMachine.Name",
+                "region": self.region,
+                "state.$": "$",
             }),
+            result_path=sfn.JsonPath.DISCARD,  # don't mutate state
         )
 
-        notify_failure = tasks.SnsPublish(
+        notify_failure = tasks.LambdaInvoke(
             self, "NotifyFailure",
-            topic=notify_topic,
-            message=sfn.TaskInput.from_object({
+            lambda_function=notify_function,
+            payload=sfn.TaskInput.from_object({
                 "status": "FAILURE",
-                "pipeline": "data-pipeline",
-                "detail.$": "$",
+                "executionId.$": "$$.Execution.Name",
+                "executionArn.$": "$$.Execution.Id",
+                "startTime.$": "$$.Execution.StartTime",
+                "stateMachineName.$": "$$.StateMachine.Name",
+                "region": self.region,
+                "state.$": "$",
             }),
+            result_path=sfn.JsonPath.DISCARD,
         )
 
         # ------------------------------------------------------------------ #

@@ -45,7 +45,7 @@ StepFunctionsStack(
     ml_export_function=ingestion.ml_export_function,
     ml_load_function=ingestion.ml_load_function,
     quality_gate_function=ingestion.quality_gate_function,
-    notify_topic=monitoring.notify_topic,
+    notify_function=monitoring.notify_function,
     dbt_cluster=compute.cluster,
     dbt_task_definition=compute.dbt_task_definition,
     raw_bucket_name=ingestion.raw_bucket.bucket_name,
