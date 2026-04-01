@@ -30,12 +30,19 @@ from check_runner import (  # noqa: E402
 #  Helpers                                                                     #
 # --------------------------------------------------------------------------- #
 
-def _client(scalar=None, all_rows=None):
-    """Return a mock SnowflakeClient that produces canned results."""
+_UNSET = object()
+
+
+def _client(scalar=_UNSET, all_rows=_UNSET):
+    """Return a mock SnowflakeClient that produces canned results.
+
+    Uses a sentinel so callers can pass scalar=None explicitly to simulate
+    Snowflake returning NULL.
+    """
     client = MagicMock()
-    if scalar is not None:
+    if scalar is not _UNSET:
         client.fetch_scalar.return_value = scalar
-    if all_rows is not None:
+    if all_rows is not _UNSET:
         client.fetch_all.return_value = all_rows
     return client
 

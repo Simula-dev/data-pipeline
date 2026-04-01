@@ -36,7 +36,7 @@ def lambda_handler(event: dict, context) -> dict:
     Main entry point. Must be idempotent per (source_name, date) where possible.
     Returns a summary dict consumed by the next Step Functions state.
     """
-    log_event(logger, "ingest_invoked", event=event)
+    log_event(logger, "ingest_invoked", payload=event)
 
     try:
         config = SourceConfig.from_event(event)

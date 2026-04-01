@@ -36,7 +36,7 @@ STAGE_NAME = os.environ.get("SNOWFLAKE_STAGE", "RAW.S3_RAW_STAGE")
 
 
 def lambda_handler(event: dict, context) -> dict:
-    log_event(logger, "ml_export_invoked", event=event)
+    log_event(logger, "ml_export_invoked", payload=event)
 
     # Per-run id for S3 prefix so concurrent pipelines don't collide
     run_id = event.get("loadResult", {}).get("Payload", {}).get("loadId") or \

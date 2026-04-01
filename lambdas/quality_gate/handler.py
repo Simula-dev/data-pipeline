@@ -33,7 +33,7 @@ CHECKS_PATH = Path(__file__).parent / "checks.json"
 
 
 def lambda_handler(event: dict, context) -> dict:
-    log_event(logger, "quality_gate_invoked", event=event)
+    log_event(logger, "quality_gate_invoked", payload=event)
 
     checks = _load_checks(CHECKS_PATH)
     log_event(logger, "checks_loaded", count=len(checks))

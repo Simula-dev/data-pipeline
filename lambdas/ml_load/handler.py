@@ -30,7 +30,7 @@ PREDICTIONS_TABLE = os.environ.get("ML_PREDICTIONS_TABLE", "MARTS.ML_PREDICTIONS
 
 
 def lambda_handler(event: dict, context) -> dict:
-    log_event(logger, "ml_load_invoked", event=event)
+    log_event(logger, "ml_load_invoked", payload=event)
 
     s3_output_path = _extract_output_path(event)
     if not s3_output_path:

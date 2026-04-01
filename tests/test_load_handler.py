@@ -14,9 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-# Add the load Lambda dir to sys.path so `import handler` resolves
-LOAD_DIR = Path(__file__).resolve().parents[1] / "lambdas" / "load"
-sys.path.insert(0, str(LOAD_DIR))
+LOAD_DIR = str(Path(__file__).resolve().parents[1] / "lambdas" / "load")
 
 
 @pytest.fixture(autouse=True)
@@ -27,11 +25,23 @@ def _env(monkeypatch):
 
 
 def _fresh_handler_module():
-    """Re-import handler after patching env / sys.modules so env vars are picked up."""
-    if "handler" in sys.modules:
-        del sys.modules["handler"]
-    if "snowflake_client" in sys.modules:
-        del sys.modules["snowflake_client"]
+    """
+    Re-import the load Lambda's handler module in isolation.
+
+    Other test files also add their Lambda dirs to sys.path and may have
+    imported `handler` / `snowflake_client` / `logger` from those dirs
+    first, leaving stale entries in sys.modules. This helper forces the
+    load dir to the FRONT of sys.path and clears the shared module names
+    before re-importing.
+    """
+    # Remove any existing occurrence, then prepend so the load dir wins
+    while LOAD_DIR in sys.path:
+        sys.path.remove(LOAD_DIR)
+    sys.path.insert(0, LOAD_DIR)
+
+    for mod in ("handler", "snowflake_client", "logger"):
+        sys.modules.pop(mod, None)
+
     import handler  # noqa: WPS433
     return handler
 

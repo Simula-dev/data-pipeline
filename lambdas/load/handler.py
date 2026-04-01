@@ -36,7 +36,7 @@ FILE_FORMAT = os.environ.get("SNOWFLAKE_FILE_FORMAT", "RAW.NDJSON_FORMAT")
 
 
 def lambda_handler(event: dict, context) -> dict:
-    log_event(logger, "load_invoked", event=event)
+    log_event(logger, "load_invoked", payload=event)
 
     source, s3_key = _extract_ingest_result(event)
     if not s3_key:
