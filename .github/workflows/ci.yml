@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------- #
+  #  test \u2014 runs on every push and PR                                #
+  # ---------------------------------------------------------------- #
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run pytest
+        run: pytest tests/ -v --tb=short
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: |
+            .coverage
+            htmlcov/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ---------------------------------------------------------------- #
+  #  synth \u2014 validates the CDK app compiles and bundling works       #
+  #  (Docker is pre-installed on ubuntu runners, no setup needed)    #
+  # ---------------------------------------------------------------- #
+  synth:
+    name: CDK synth
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install AWS CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: CDK Synth
+        run: |
+          cdk synth --all \
+            --context account=000000000000 \
+            --context alert_email=ci@example.com \
+            --quiet
+
+  # ---------------------------------------------------------------- #
+  #  deploy \u2014 only on main branch push, after test + synth pass     #
+  # ---------------------------------------------------------------- #
+  deploy:
+    name: CDK deploy
+    runs-on: ubuntu-latest
+    needs: [test, synth]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write   # required for OIDC auth to AWS
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install AWS CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: CDK Deploy
+        run: |
+          cdk deploy --all \
+            --require-approval never \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context region=${{ env.AWS_REGION }} \
+            --context alert_email=${{ secrets.ALERT_EMAIL }}
