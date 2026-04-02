@@ -90,6 +90,10 @@ class IngestionStack(Stack):
                 "lambdas/load",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    # user=root works around a Docker Desktop Windows WSL2
+                    # UID mismatch on bind mounts; files end up readable by
+                    # Lambda runtime regardless of host ownership.
+                    user="root",
                     command=[
                         "bash",
                         "-c",
@@ -155,6 +159,7 @@ class IngestionStack(Stack):
                 "lambdas/ml_export",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    user="root",  # see LoadFunction for rationale
                     command=[
                         "bash", "-c",
                         "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
@@ -183,6 +188,7 @@ class IngestionStack(Stack):
                 "lambdas/ml_load",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    user="root",  # see LoadFunction for rationale
                     command=[
                         "bash", "-c",
                         "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
@@ -210,6 +216,7 @@ class IngestionStack(Stack):
                 "lambdas/quality_gate",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    user="root",  # see LoadFunction for rationale
                     command=[
                         "bash", "-c",
                         "pip install --no-cache-dir -r requirements.txt -t /asset-output && "

@@ -24,6 +24,13 @@ from constructs import Construct
 
 
 class ComputeStack(Stack):
+    # Override the stack's AZ property to avoid AWS DescribeAvailabilityZones
+    # calls during synth. The first two AZs of any commercial region are
+    # always available for Fargate, so we hard-code them.
+    @property
+    def availability_zones(self) -> list[str]:
+        return [f"{self.region}a", f"{self.region}b"]
+
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
