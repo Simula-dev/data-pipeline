@@ -89,7 +89,14 @@ jobs:
     name: CDK deploy
     runs-on: ubuntu-latest
     needs: [test, synth]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Deploy only runs when the repo variable DEPLOY_ENABLED is set to 'true'.
+    # To enable: gh variable set DEPLOY_ENABLED --body true --repo <owner>/<repo>
+    # Requires these repository secrets to also be configured:
+    #   AWS_DEPLOY_ROLE_ARN, AWS_ACCOUNT_ID, ALERT_EMAIL
+    if: >-
+      github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+      && vars.DEPLOY_ENABLED == 'true'
     permissions:
       id-token: write   # required for OIDC auth to AWS
       contents: read
