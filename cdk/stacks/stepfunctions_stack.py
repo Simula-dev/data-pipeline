@@ -40,6 +40,7 @@ class StepFunctionsStack(Stack):
         notify_function: _lambda.Function,
         dbt_cluster: ecs.Cluster,
         dbt_task_definition: ecs.FargateTaskDefinition,
+        dbt_security_group: ec2.ISecurityGroup,
         raw_bucket_name: str,
         **kwargs,
     ) -> None:
@@ -78,6 +79,7 @@ class StepFunctionsStack(Stack):
                 platform_version=ecs.FargatePlatformVersion.LATEST
             ),
             subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
+            security_groups=[dbt_security_group],
             assign_public_ip=False,
             container_overrides=[
                 tasks.ContainerOverride(

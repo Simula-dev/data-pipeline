@@ -5,14 +5,12 @@ Complete guide for getting the data pipeline running locally and deployed to AWS
 ## 1. Install prerequisites
 
 ### Python 3.12+
-Download from <https://www.python.org/downloads/> or:
 ```powershell
 winget install Python.Python.3.12
 ```
 Verify: `python --version`
 
 ### Node.js 20+ (for AWS CDK CLI)
-Download from <https://nodejs.org/> or:
 ```powershell
 winget install OpenJS.NodeJS
 ```
@@ -37,7 +35,10 @@ cdk --version
 ```
 
 ### Docker Desktop (for dbt image build)
-Download from <https://www.docker.com/products/docker-desktop/>
+Only needed locally if you want to run `cdk synth --all` or `cdk deploy`
+against the dbt `DockerImageAsset`. Lambda bundling is NOT required — all
+Lambdas use the Redshift Data API via boto3 (in the runtime).
+<https://www.docker.com/products/docker-desktop/>
 
 ## 2. Clone and set up the project
 
@@ -52,6 +53,9 @@ python -m venv .venv
 
 # Install Python deps (CDK + boto3 + pytest + moto)
 pip install -r requirements-dev.txt
+
+# Run the test suite (no AWS credentials required)
+pytest tests/ -v
 ```
 
 ## 3. Configure your AWS account
@@ -67,59 +71,51 @@ Bootstrap CDK in your account (one-time per account/region):
 cdk bootstrap aws://123456789012/us-east-1
 ```
 
-## 4. Set up Snowflake
-
-Run the SQL scripts in `sql/setup/` in order. Full instructions in
-[`sql/setup/README.md`](sql/setup/README.md). High level:
-
-1. `01_database_warehouse.sql` — creates DB, warehouse, roles, service user
-2. Deploy `DataPipeline-Ingestion` stack first so you have the IAM role ARN:
-   `cdk deploy DataPipeline-Ingestion`
-3. `02_storage_integration.sql` — create S3 storage integration, paste the CDK outputs
-4. Update the IAM role trust policy with Snowflake's IAM user + external ID
-   (full commands in `sql/setup/README.md`)
-5. `03_file_format_stage.sql` — create NDJSON file format and external stage
-6. `04_raw_table.sql` — create the `RAW.LANDING` table and audit view
-
-## 5. Store secrets in SSM Parameter Store
-
-Snowflake (used by Steps 2, 3, 5):
-```bash
-aws ssm put-parameter --name /data-pipeline/snowflake/account --value "xy12345.us-east-1" --type SecureString
-aws ssm put-parameter --name /data-pipeline/snowflake/user --value "PIPELINE_USER" --type SecureString
-aws ssm put-parameter --name /data-pipeline/snowflake/password --value "..." --type SecureString
-aws ssm put-parameter --name /data-pipeline/snowflake/database --value "DATA_PIPELINE" --type String
-aws ssm put-parameter --name /data-pipeline/snowflake/warehouse --value "TRANSFORM_WH" --type String
-aws ssm put-parameter --name /data-pipeline/snowflake/schema --value "raw" --type String
-```
-
-Any API keys your ingest sources need:
-```bash
-aws ssm put-parameter --name /data-pipeline/secrets/my_api_token --value "..." --type SecureString
-```
-
-## 6. Deploy
+## 4. Validate stacks synthesize locally
 
 ```bash
-# Synth to validate
-cdk synth --all
-
-# Deploy everything
-cdk deploy --all --context alert_email=you@example.com
+cdk synth --all --context alert_email=you@example.com
 ```
 
-Or deploy a single stack during development:
+Should produce 7 CloudFormation templates under `cdk.out/`:
+- `DataPipeline-Compute`
+- `DataPipeline-Redshift`
+- `DataPipeline-Ingestion`
+- `DataPipeline-DataSync`
+- `DataPipeline-SageMaker`
+- `DataPipeline-Monitoring`
+- `DataPipeline-Orchestration`
+
+## 5. Deploy the infrastructure
+
 ```bash
-cdk deploy DataPipeline-Ingestion
+cdk deploy --all --context alert_email=you@example.com --require-approval never
 ```
 
-## 7. Run tests
+First deploy takes ~15-20 minutes. Watch for the stack outputs at the end:
+- `DataPipeline-Redshift.AdminSecretArn` — Secrets Manager ARN with the Redshift admin password
+- `DataPipeline-Redshift.WorkgroupName` — should be `data-pipeline`
+- `DataPipeline-Ingestion.RawBucketName` — the S3 raw bucket
 
+## 6. Run the Redshift setup SQL
+
+Follow `sql/setup/README.md`. Quick version via Redshift Query Editor v2:
+
+1. AWS Console → Redshift → Query editor v2
+2. Connect to the `data-pipeline` workgroup using admin credentials
+   (retrieve from Secrets Manager: `data-pipeline/redshift/admin`)
+3. Open and run `sql/setup/01_schemas.sql`
+4. Open and run `sql/setup/02_tables.sql`
+
+## 7. (Optional) Store API keys for HTTP ingest sources
+
+If your ingest sources need authentication (GitHub PAT, etc.):
 ```bash
-pytest tests/ -v
+aws ssm put-parameter \
+  --name /data-pipeline/secrets/github_token \
+  --value "ghp_..." \
+  --type SecureString
 ```
-
-Expected output: all tests pass (config, S3 writer, HTTP client).
 
 ## 8. Trigger a pipeline run
 
@@ -129,4 +125,12 @@ aws stepfunctions start-execution \
   --input file://examples/event_jsonplaceholder.json
 ```
 
-See `examples/` for ready-to-use event payloads.
+See `examples/` for ready-to-use event payloads. The simplest is
+`event_jsonplaceholder.json` — no auth, no setup beyond the infrastructure.
+
+## 9. Monitor the execution
+
+- **Step Functions console**: watch the visual state machine graph
+- **CloudWatch dashboard**: `data-pipeline` dashboard
+- **Notify SNS topic**: `data-pipeline-notifications` — subscribe your email
+  via the `alert_email` context arg or manually via the SNS console

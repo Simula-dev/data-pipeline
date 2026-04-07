@@ -1,3 +1,2 @@
-# Snowflake connector \u2014 bundled via CDK Docker bundling (Linux x86_64).
-# Pinned to a version with prebuilt manylinux wheels to keep bundling fast.
-snowflake-connector-python==3.12.3
+# Lambda uses only boto3 (available in the runtime) and stdlib.
+# No external dependencies, no Docker bundling required.

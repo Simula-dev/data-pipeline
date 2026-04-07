@@ -1,7 +1,7 @@
-# dbt connection profile for Snowflake.
+# dbt connection profile for Redshift Serverless.
 #
 # Credentials are injected as environment variables by the ECS task at
-# container start \u2014 ECS pulls them from SSM Parameter Store via the
+# container start. ECS pulls them from SSM Parameter Store via the
 # `secrets` block in the task definition (see cdk/stacks/compute_stack.py).
 #
 # Do NOT commit real credentials here.
@@ -11,28 +11,27 @@ data_pipeline:
   outputs:
 
     prod:
-      type: snowflake
-      account:  "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
-      user:     "{{ env_var('SNOWFLAKE_USER') }}"
-      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role:      TRANSFORMER
-      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'DATA_PIPELINE') }}"
-      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'TRANSFORM_WH') }}"
-      schema:    RAW           # default schema; overridden per-model via +schema
+      type: redshift
+      host:     "{{ env_var('REDSHIFT_HOST') }}"
+      port:     5439
+      user:     "{{ env_var('REDSHIFT_USER', 'admin') }}"
+      password: "{{ env_var('REDSHIFT_PASSWORD') }}"
+      dbname:   "{{ env_var('REDSHIFT_DATABASE', 'data_pipeline') }}"
+      schema:   raw
       threads: 8
-      client_session_keep_alive: false
-      query_tag: "dbt-pipeline"
+      ra3_node: true
+      sslmode: require
+      keepalives_idle: 240
+      connect_timeout: 30
 
-    # Local dev target \u2014 used when running dbt from your workstation
     dev:
-      type: snowflake
-      account:  "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
-      user:     "{{ env_var('SNOWFLAKE_USER') }}"
-      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role:      TRANSFORMER
-      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'DATA_PIPELINE') }}"
-      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'TRANSFORM_WH') }}"
-      schema:    RAW
+      type: redshift
+      host:     "{{ env_var('REDSHIFT_HOST') }}"
+      port:     5439
+      user:     "{{ env_var('REDSHIFT_USER', 'admin') }}"
+      password: "{{ env_var('REDSHIFT_PASSWORD') }}"
+      dbname:   "{{ env_var('REDSHIFT_DATABASE', 'data_pipeline') }}"
+      schema:   raw
       threads: 4
-      client_session_keep_alive: false
-      query_tag: "dbt-dev-{{ env_var('USER', 'local') }}"
+      ra3_node: true
+      sslmode: require

@@ -1,6 +1,6 @@
 # Data Pipeline
 
-AWS CDK data pipeline — S3 → Snowflake → dbt → SageMaker, orchestrated by Step Functions.
+AWS CDK data pipeline — S3 → Redshift Serverless → dbt → SageMaker, orchestrated by Step Functions.
 
 > **Setup instructions:** see [SETUP.md](SETUP.md) for installing Python, Node, CDK, AWS CLI, and running tests.
 
@@ -9,7 +9,7 @@ AWS CDK data pipeline — S3 → Snowflake → dbt → SageMaker, orchestrated b
 | Step | Status | Module |
 |---|---|---|
 | 1. Ingest (HTTP + DataSync) | ✅ Complete | `lambdas/ingest/`, `cdk/stacks/datasync_stack.py` |
-| 2. Load to Snowflake | ✅ Complete | `lambdas/load/`, `sql/setup/` |
+| 2. Load to Redshift | ✅ Complete | `lambdas/load/`, `sql/setup/` |
 | 3. dbt Transformation | ✅ Complete | `dbt/`, `cdk/stacks/compute_stack.py` |
 | 4. ML Inference (SageMaker) | ✅ Complete | `ml/`, `lambdas/ml_export/`, `lambdas/ml_load/`, `cdk/stacks/sagemaker_stack.py` |
 | 5. Data Quality Gate | ✅ Complete | `lambdas/quality_gate/` |
@@ -21,11 +21,15 @@ AWS CDK data pipeline — S3 → Snowflake → dbt → SageMaker, orchestrated b
 |---|---|
 | IaC | AWS CDK (Python) |
 | Orchestration | AWS Step Functions |
-| Storage | S3 (raw zone) + Snowflake |
-| Transformation | dbt Core on ECS Fargate |
-| AI / ML | AWS SageMaker |
+| Warehouse | Amazon Redshift Serverless |
+| Object storage | S3 (raw landing zone) |
+| Transformation | dbt Core (dbt-redshift) on ECS Fargate |
+| Warehouse interaction | Redshift Data API (no JDBC/ODBC connectors required) |
+| AI / ML | AWS SageMaker (Batch Transform) |
 | CI/CD | GitHub Actions → CDK Deploy |
-| Monitoring | CloudWatch + SNS |
+| Monitoring | CloudWatch (custom metrics via EMF) + SNS |
+
+> **Multi-warehouse note:** This pipeline was originally designed for Snowflake; the architecture cleanly separates the warehouse-coupled layer (~30% of the code) from the rest. Adding Snowflake back as a second target later is straightforward — see the original commit history for the Snowflake implementation.
 
 ## Project structure
 

@@ -1,14 +1,9 @@
 """
-ML Load Lambda \u2014 COPY INTO Snowflake from the S3 prefix Batch Transform wrote to.
+ML Load Lambda \u2014 COPY Batch Transform output CSV into marts.ml_predictions.
 
-Event (from Step Functions, after SageMakerCreateTransformJob):
-    {
-        "mlExport": { "Payload": { "runId": "...", "s3InputPrefix": "s3://.../" } },
-        "transformResult": { "TransformOutput": { "S3OutputPath": "s3://.../ml/output/<id>/" } }
-    }
-
-Writes rows into MARTS.ML_PREDICTIONS (load_id, predicted_at, input_row, prediction).
-Returns a summary with rows loaded.
+Uses Redshift COPY FROM S3. Similar temp-table pattern to the main load
+Lambda: COPY into a staging temp table (single prediction column), then
+INSERT into the target with load_id + timestamp.
 """
 
 from __future__ import annotations
@@ -16,17 +11,15 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
-import boto3
-
 from logger import get_logger, log_event
+from redshift_client import RedshiftClient, RedshiftError
 
 
 logger = get_logger("ml_load")
-ssm = boto3.client("ssm")
 
-SSM_PREFIX = os.environ.get("SNOWFLAKE_PARAM_PREFIX", "/data-pipeline/snowflake")
-STAGE_NAME = os.environ.get("SNOWFLAKE_STAGE", "RAW.S3_RAW_STAGE")
-PREDICTIONS_TABLE = os.environ.get("ML_PREDICTIONS_TABLE", "MARTS.ML_PREDICTIONS")
+REDSHIFT_S3_ROLE_ARN = os.environ["REDSHIFT_S3_ROLE_ARN"]
+PREDICTIONS_TABLE = os.environ.get("ML_PREDICTIONS_TABLE", "marts.ml_predictions")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -41,32 +34,96 @@ def lambda_handler(event: dict, context) -> dict:
         or getattr(context, "aws_request_id", "local-test")
     )
 
-    # Convert s3://bucket/key/ to stage-relative path
-    parsed = urlparse(s3_output_path)
-    stage_rel_path = parsed.path.lstrip("/")
+    client = RedshiftClient()
 
-    from snowflake_client import SnowflakeClient, SnowflakeConfig
+    statements = [
+        "DROP TABLE IF EXISTS pred_stage;",
+        "CREATE TEMP TABLE pred_stage (prediction VARCHAR(65535));",
+        (
+            f"COPY pred_stage (prediction) "
+            f"FROM '{s3_output_path}' "
+            f"IAM_ROLE '{REDSHIFT_S3_ROLE_ARN}' "
+            f"FORMAT AS CSV IGNOREHEADER 1 "
+            f"REGION AS '{AWS_REGION}';"
+        ),
+        (
+            f"INSERT INTO {PREDICTIONS_TABLE} (load_id, predicted_at, prediction) "
+            f"SELECT '{_quote(run_id)}', GETDATE(), prediction::SUPER "
+            f"FROM pred_stage;"
+        ),
+        "DROP TABLE pred_stage;",
+    ]
 
-    config = SnowflakeConfig.from_ssm(SSM_PREFIX)
-    with SnowflakeClient(config) as client:
-        result = client.copy_predictions_into_marts(
-            stage_name=STAGE_NAME,
-            stage_path=stage_rel_path,
-            target_table=PREDICTIONS_TABLE,
-            load_id=run_id,
+    try:
+        _run_batch(client, statements)
+    except RedshiftError as exc:
+        log_event(
+            logger,
+            "ml_load_redshift_error",
+            statement_id=exc.statement_id,
+            status=exc.status,
+            error=str(exc),
         )
+        raise
 
-    summary = {"loadId": run_id, "s3OutputPath": s3_output_path, **result}
+    rows_loaded = _count_loaded_rows(client, PREDICTIONS_TABLE, run_id)
+
+    summary = {
+        "loadId": run_id,
+        "s3OutputPath": s3_output_path,
+        "rowsLoaded": rows_loaded,
+        "filesLoaded": 1,
+        "status": "LOADED",
+    }
     log_event(logger, "ml_load_complete", **summary)
     return summary
 
 
 def _extract_output_path(event: dict) -> str | None:
-    """Find the batch transform output path in the Step Functions state."""
     tr = event.get("transformResult")
     if isinstance(tr, dict):
-        # Native SM task returns camel-cased fields
         output = tr.get("TransformOutput") or tr.get("transformOutput")
         if output:
             return output.get("S3OutputPath") or output.get("s3OutputPath")
     return None
+
+
+def _run_batch(client: RedshiftClient, statements: list[str]) -> None:
+    """Execute statements in a single session so the TEMP TABLE is visible to COPY/INSERT."""
+    import boto3
+    import time
+    rs = boto3.client("redshift-data")
+
+    resp = rs.batch_execute_statement(
+        WorkgroupName=client.workgroup,
+        Database=client.database,
+        Sqls=statements,
+        WithEvent=False,
+    )
+    statement_id = resp["Id"]
+    log_event(logger, "redshift_batch_submitted", id=statement_id, count=len(statements))
+
+    deadline = time.monotonic() + client.default_timeout
+    while time.monotonic() < deadline:
+        desc = rs.describe_statement(Id=statement_id)
+        status = desc["Status"]
+        if status == "FINISHED":
+            return
+        if status in ("FAILED", "ABORTED"):
+            raise RedshiftError(
+                f"Batch {status}: {desc.get('Error', 'no details')}",
+                statement_id=statement_id,
+                status=status,
+                details=desc,
+            )
+        time.sleep(client.poll_interval)
+    raise TimeoutError(f"Batch {statement_id} did not finish in {client.default_timeout}s")
+
+
+def _count_loaded_rows(client: RedshiftClient, table: str, load_id: str) -> int:
+    sql = f"SELECT COUNT(*) FROM {table} WHERE load_id = '{_quote(load_id)}'"
+    return int(client.fetch_scalar(sql) or 0)
+
+
+def _quote(value: str) -> str:
+    return str(value).replace("'", "''")

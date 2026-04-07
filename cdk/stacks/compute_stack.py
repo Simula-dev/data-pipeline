@@ -1,13 +1,15 @@
 """
-ComputeStack \u2014 ECS Fargate cluster and task definition for running dbt Core transformations.
+ComputeStack \u2014 ECS Fargate cluster + dbt task definition for Redshift.
 
-Key design:
-  - DockerImageAsset builds dbt/Dockerfile during `cdk deploy` and pushes
-    to a CDK-managed ECR repo. No manual ECR workflow required.
-  - Snowflake credentials are injected into the container at start time
-    via ECS `secrets` integration with SSM Parameter Store.
-  - The same image is reused by Step Functions for `dbt run`, `dbt test`,
-    and `dbt source freshness` \u2014 the command is overridden per-step.
+Networking:
+  - 3-AZ VPC (Redshift Serverless requires 3+ subnets across AZs)
+  - Private subnets with NAT egress for outbound internet (package installs)
+  - Fargate tasks run in private subnets
+
+dbt container:
+  - Built via DockerImageAsset from ./dbt/Dockerfile
+  - Credentials injected at container start via ECS `secrets` integration
+    with AWS Secrets Manager (Redshift admin password) and SSM (host, db)
 """
 
 from aws_cdk import (
@@ -18,29 +20,32 @@ from aws_cdk import (
     aws_logs as logs,
     aws_ssm as ssm,
     aws_ecr_assets as ecr_assets,
+    aws_secretsmanager as secretsmanager,
     RemovalPolicy,
 )
 from constructs import Construct
 
 
 class ComputeStack(Stack):
-    # Override the stack's AZ property to avoid AWS DescribeAvailabilityZones
-    # calls during synth. The first two AZs of any commercial region are
-    # always available for Fargate, so we hard-code them.
     @property
     def availability_zones(self) -> list[str]:
-        return [f"{self.region}a", f"{self.region}b"]
+        return [f"{self.region}a", f"{self.region}b", f"{self.region}c"]
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # --------------------------------------------------------------- #
-        #  Networking                                                      #
+        #  Networking \u2014 3-AZ VPC                                          #
         # --------------------------------------------------------------- #
         self.vpc = ec2.Vpc(
             self,
             "PipelineVpc",
-            max_azs=2,
+            max_azs=3,
             nat_gateways=1,
             subnet_configuration=[
                 ec2.SubnetConfiguration(
@@ -68,7 +73,7 @@ class ComputeStack(Stack):
         )
 
         # --------------------------------------------------------------- #
-        #  dbt Docker image \u2014 built from ./dbt during `cdk deploy`          #
+        #  dbt Docker image \u2014 built during `cdk deploy`                    #
         # --------------------------------------------------------------- #
         dbt_image_asset = ecr_assets.DockerImageAsset(
             self,
@@ -79,21 +84,33 @@ class ComputeStack(Stack):
         )
 
         # --------------------------------------------------------------- #
-        #  Import Snowflake credentials from SSM Parameter Store           #
+        #  dbt Fargate security group                                      #
+        #  RedshiftStack takes this as a param and grants 5439 ingress.    #
         # --------------------------------------------------------------- #
-        # Reference existing SSM params by name. ECS will fetch at container
-        # start and inject as environment variables. Both String and
-        # SecureString types work with ecs.Secret.from_ssm_parameter().
-        def _import_param(logical_id: str, name: str) -> ssm.IParameter:
+        self.dbt_security_group = ec2.SecurityGroup(
+            self,
+            "DbtSecurityGroup",
+            vpc=self.vpc,
+            description="dbt Fargate tasks \u2014 egress to Redshift + internet",
+            allow_all_outbound=True,
+        )
+
+        # --------------------------------------------------------------- #
+        #  Import Redshift creds (by well-known name, not cross-stack ref) #
+        #  Avoids a circular dependency with RedshiftStack, which takes    #
+        #  this stack's VPC + dbt SG as inputs.                            #
+        # --------------------------------------------------------------- #
+        admin_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "RedshiftAdminSecret", "data-pipeline/redshift/admin"
+        )
+
+        def _import_ssm(logical_id: str, name: str) -> ssm.IParameter:
             return ssm.StringParameter.from_string_parameter_name(
                 self, logical_id, string_parameter_name=name
             )
 
-        sf_account   = _import_param("SFAccountParam",   "/data-pipeline/snowflake/account")
-        sf_user      = _import_param("SFUserParam",      "/data-pipeline/snowflake/user")
-        sf_password  = _import_param("SFPasswordParam",  "/data-pipeline/snowflake/password")
-        sf_database  = _import_param("SFDatabaseParam",  "/data-pipeline/snowflake/database")
-        sf_warehouse = _import_param("SFWarehouseParam", "/data-pipeline/snowflake/warehouse")
+        rs_workgroup = _import_ssm("RSWorkgroupParam", "/data-pipeline/redshift/workgroup")
+        rs_database  = _import_ssm("RSDatabaseParam",  "/data-pipeline/redshift/database")
 
         # --------------------------------------------------------------- #
         #  Task roles                                                      #
@@ -107,10 +124,11 @@ class ComputeStack(Stack):
                     "service-role/AmazonECSTaskExecutionRolePolicy"
                 )
             ],
-            description="Pulls image from ECR and fetches SSM secrets at task start",
+            description="Pulls image from ECR and fetches secrets at task start",
         )
-        # ECS execution role also needs read on the SSM params (to inject them)
-        for param in (sf_account, sf_user, sf_password, sf_database, sf_warehouse):
+        # Grant reads on the secrets / SSM params that get injected
+        admin_secret.grant_read(execution_role)
+        for param in (rs_workgroup, rs_database):
             param.grant_read(execution_role)
 
         task_role = iam.Role(
@@ -119,7 +137,7 @@ class ComputeStack(Stack):
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
             description="Runtime permissions for the dbt container",
         )
-        # dbt itself may need to read additional SSM params (e.g. custom vars)
+        # dbt uses Redshift Data API for some ops (optional) + reads SSM for vars
         task_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["ssm:GetParameter", "ssm:GetParameters"],
@@ -152,6 +170,11 @@ class ComputeStack(Stack):
             task_role=task_role,
         )
 
+        # Redshift Serverless endpoint is deterministic:
+        #   <workgroup>.<account>.<region>.redshift-serverless.amazonaws.com
+        # Workgroup name is fixed in RedshiftStack.
+        redshift_host = f"data-pipeline.{self.account}.{self.region}.redshift-serverless.amazonaws.com"
+
         self.dbt_task_definition.add_container(
             "DbtContainer",
             image=ecs.ContainerImage.from_docker_image_asset(dbt_image_asset),
@@ -161,14 +184,13 @@ class ComputeStack(Stack):
             ),
             environment={
                 "DBT_PROFILES_DIR": "/app/dbt",
+                "REDSHIFT_HOST": redshift_host,
             },
             secrets={
-                "SNOWFLAKE_ACCOUNT":   ecs.Secret.from_ssm_parameter(sf_account),
-                "SNOWFLAKE_USER":      ecs.Secret.from_ssm_parameter(sf_user),
-                "SNOWFLAKE_PASSWORD":  ecs.Secret.from_ssm_parameter(sf_password),
-                "SNOWFLAKE_DATABASE":  ecs.Secret.from_ssm_parameter(sf_database),
-                "SNOWFLAKE_WAREHOUSE": ecs.Secret.from_ssm_parameter(sf_warehouse),
+                # Secrets Manager JSON secret \u2014 pull individual keys via field
+                "REDSHIFT_USER":     ecs.Secret.from_secrets_manager(admin_secret, field="username"),
+                "REDSHIFT_PASSWORD": ecs.Secret.from_secrets_manager(admin_secret, field="password"),
+                "REDSHIFT_DATABASE": ecs.Secret.from_ssm_parameter(rs_database),
             },
-            # Default command \u2014 Step Functions overrides per step
             command=["dbt", "build", "--profiles-dir", "/app/dbt"],
         )

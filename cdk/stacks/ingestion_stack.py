@@ -1,5 +1,9 @@
 """
-IngestionStack — S3 raw landing bucket + Lambda functions for ingest, Snowflake load, and quality gate.
+IngestionStack \u2014 S3 raw landing bucket + Lambda functions for ingest, load, ml, and quality gate.
+
+All Lambdas use the Redshift Data API (redshift-data service) via boto3
+which is already in the Lambda runtime. No Docker bundling, no C extensions,
+no Lambda Layers \u2014 just pure Python + stdlib + boto3.
 """
 
 from aws_cdk import (
@@ -8,7 +12,6 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_lambda as _lambda,
     aws_iam as iam,
-    BundlingOptions,
     RemovalPolicy,
     CfnOutput,
 )
@@ -16,7 +19,15 @@ from constructs import Construct
 
 
 class IngestionStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        redshift_workgroup_name: str,
+        redshift_database_name: str,
+        redshift_s3_role_arn: str,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # --- S3 raw landing zone ---
@@ -40,7 +51,7 @@ class IngestionStack(Stack):
             ],
         )
 
-        # Shared execution role for pipeline Lambdas
+        # --- Shared execution role for pipeline Lambdas ---
         lambda_role = iam.Role(
             self,
             "PipelineLambdaRole",
@@ -53,15 +64,45 @@ class IngestionStack(Stack):
         )
         self.raw_bucket.grant_read_write(lambda_role)
 
-        # Snowflake credentials stored in SSM — grant read access
+        # API keys (for HTTP ingest sources) live in SSM under /data-pipeline/secrets/*
         lambda_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["ssm:GetParameter", "ssm:GetParameters"],
                 resources=[
-                    f"arn:aws:ssm:{self.region}:{self.account}:parameter/data-pipeline/snowflake/*"
+                    f"arn:aws:ssm:{self.region}:{self.account}:parameter/data-pipeline/*"
                 ],
             )
         )
+
+        # Redshift Data API permissions \u2014 load/ml/quality Lambdas call these
+        lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "redshift-data:ExecuteStatement",
+                    "redshift-data:BatchExecuteStatement",
+                    "redshift-data:DescribeStatement",
+                    "redshift-data:GetStatementResult",
+                    "redshift-data:CancelStatement",
+                ],
+                resources=["*"],  # Data API doesn't support resource-level perms
+            )
+        )
+        # Redshift Data API also requires GetCredentials against the workgroup
+        lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["redshift-serverless:GetCredentials"],
+                resources=[
+                    f"arn:aws:redshift-serverless:{self.region}:{self.account}:workgroup/*"
+                ],
+            )
+        )
+
+        # Common env vars for all Lambdas that talk to Redshift
+        redshift_env = {
+            "REDSHIFT_WORKGROUP": redshift_workgroup_name,
+            "REDSHIFT_DATABASE": redshift_database_name,
+            "REDSHIFT_S3_ROLE_ARN": redshift_s3_role_arn,
+        }
 
         # --- Lambda: ingest raw data into S3 ---
         self.ingest_function = _lambda.Function(
@@ -78,131 +119,52 @@ class IngestionStack(Stack):
             },
         )
 
-        # --- Lambda: load S3 data into Snowflake (COPY INTO) ---
-        # Bundled in Docker because snowflake-connector-python has C extensions
-        # that must be compiled for Lambda's Linux x86_64 runtime.
+        # --- Lambda: load S3 data into Redshift (COPY via temp table) ---
         self.load_function = _lambda.Function(
             self,
             "LoadFunction",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset(
-                "lambdas/load",
-                bundling=BundlingOptions(
-                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    # user=root works around a Docker Desktop Windows WSL2
-                    # UID mismatch on bind mounts; files end up readable by
-                    # Lambda runtime regardless of host ownership.
-                    user="root",
-                    command=[
-                        "bash",
-                        "-c",
-                        (
-                            "pip install --no-cache-dir -r requirements.txt "
-                            "-t /asset-output && "
-                            "cp -au . /asset-output"
-                        ),
-                    ],
-                ),
-            ),
+            code=_lambda.Code.from_asset("lambdas/load"),
             role=lambda_role,
-            timeout=Duration.minutes(10),
-            memory_size=1024,
+            timeout=Duration.minutes(15),
+            memory_size=512,
             environment={
                 "RAW_BUCKET": self.raw_bucket.bucket_name,
-                "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
-                "SNOWFLAKE_STAGE": "RAW.S3_RAW_STAGE",
-                "SNOWFLAKE_FILE_FORMAT": "RAW.NDJSON_FORMAT",
+                **redshift_env,
             },
         )
 
-        # --- IAM role for Snowflake storage integration ---
-        # Snowflake assumes this role via STS to read from the raw bucket.
-        # After `cdk deploy`, run `DESC INTEGRATION S3_RAW_INTEGRATION` in
-        # Snowflake to get STORAGE_AWS_IAM_USER_ARN + STORAGE_AWS_EXTERNAL_ID,
-        # then update this role's trust policy via the AWS console or SDK.
-        self.snowflake_integration_role = iam.Role(
-            self,
-            "SnowflakeStorageIntegrationRole",
-            role_name="data-pipeline-snowflake-integration",
-            assumed_by=iam.AccountPrincipal(self.account),  # updated post-deploy
-            description="Assumed by Snowflake via STS to access the raw bucket",
-        )
-        self.raw_bucket.grant_read(self.snowflake_integration_role)
-        self.snowflake_integration_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["s3:GetBucketLocation", "s3:ListBucket"],
-                resources=[self.raw_bucket.bucket_arn],
-            )
-        )
-
-        CfnOutput(
-            self,
-            "SnowflakeIntegrationRoleArn",
-            value=self.snowflake_integration_role.role_arn,
-            description="Paste into sql/setup/02_storage_integration.sql",
-        )
-        CfnOutput(
-            self,
-            "RawBucketName",
-            value=self.raw_bucket.bucket_name,
-            description="Raw S3 bucket name \u2014 used in stage URL",
-        )
-
-        # --- Lambda: ml_export \u2014 unload inference input to S3 as CSV ---
+        # --- Lambda: ml_export \u2014 UNLOAD marts.ml_inference_input to S3 ---
         self.ml_export_function = _lambda.Function(
             self,
             "MLExportFunction",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset(
-                "lambdas/ml_export",
-                bundling=BundlingOptions(
-                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    user="root",  # see LoadFunction for rationale
-                    command=[
-                        "bash", "-c",
-                        "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
-                        "cp -au . /asset-output",
-                    ],
-                ),
-            ),
+            code=_lambda.Code.from_asset("lambdas/ml_export"),
             role=lambda_role,
-            timeout=Duration.minutes(5),
+            timeout=Duration.minutes(10),
             memory_size=512,
             environment={
                 "RAW_BUCKET": self.raw_bucket.bucket_name,
-                "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
-                "SNOWFLAKE_STAGE": "RAW.S3_RAW_STAGE",
-                "ML_INFERENCE_INPUT_TABLE": "MARTS.ML_INFERENCE_INPUT",
+                "ML_INFERENCE_INPUT_TABLE": "marts.ml_inference_input",
+                **redshift_env,
             },
         )
 
-        # --- Lambda: ml_load \u2014 COPY INTO MARTS.ML_PREDICTIONS ---
+        # --- Lambda: ml_load \u2014 COPY batch transform output into marts.ml_predictions ---
         self.ml_load_function = _lambda.Function(
             self,
             "MLLoadFunction",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset(
-                "lambdas/ml_load",
-                bundling=BundlingOptions(
-                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    user="root",  # see LoadFunction for rationale
-                    command=[
-                        "bash", "-c",
-                        "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
-                        "cp -au . /asset-output",
-                    ],
-                ),
-            ),
+            code=_lambda.Code.from_asset("lambdas/ml_load"),
             role=lambda_role,
-            timeout=Duration.minutes(5),
+            timeout=Duration.minutes(10),
             memory_size=512,
             environment={
-                "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
-                "SNOWFLAKE_STAGE": "RAW.S3_RAW_STAGE",
-                "ML_PREDICTIONS_TABLE": "MARTS.ML_PREDICTIONS",
+                "ML_PREDICTIONS_TABLE": "marts.ml_predictions",
+                **redshift_env,
             },
         )
 
@@ -212,22 +174,18 @@ class IngestionStack(Stack):
             "QualityGateFunction",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset(
-                "lambdas/quality_gate",
-                bundling=BundlingOptions(
-                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    user="root",  # see LoadFunction for rationale
-                    command=[
-                        "bash", "-c",
-                        "pip install --no-cache-dir -r requirements.txt -t /asset-output && "
-                        "cp -au . /asset-output",
-                    ],
-                ),
-            ),
+            code=_lambda.Code.from_asset("lambdas/quality_gate"),
             role=lambda_role,
             timeout=Duration.minutes(5),
             memory_size=512,
             environment={
-                "SNOWFLAKE_PARAM_PREFIX": "/data-pipeline/snowflake",
+                **redshift_env,
             },
+        )
+
+        CfnOutput(
+            self,
+            "RawBucketName",
+            value=self.raw_bucket.bucket_name,
+            description="Raw S3 bucket name",
         )

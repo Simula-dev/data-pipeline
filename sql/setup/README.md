@@ -1,85 +1,63 @@
-# Snowflake Setup
+# Redshift Setup
 
-Run these SQL scripts **in order** to prepare your Snowflake account for the pipeline.
-They're idempotent — safe to re-run after the first setup.
+Two SQL scripts to run after `cdk deploy DataPipeline-Redshift` completes.
+They're idempotent — safe to re-run.
 
 ## Prerequisites
 
-- A Snowflake account with `ACCOUNTADMIN` access
-- `cdk deploy DataPipeline-Ingestion` already run (you need the outputs)
-- AWS CLI access to update the IAM role trust policy
+- `cdk deploy` has finished and the `data-pipeline` workgroup is available
+- You have the admin password from AWS Secrets Manager:
+  `data-pipeline/redshift/admin`
 
 ## Order
 
 | Script | What it creates |
 |---|---|
-| `01_database_warehouse.sql` | Database, warehouse, schemas, roles, service user |
-| `02_storage_integration.sql` | S3 storage integration (bidirectional handshake) |
-| `03_file_format_stage.sql` | NDJSON file format, external S3 stage |
-| `04_raw_table.sql` | `RAW.LANDING` table, audit view, grants |
+| `01_schemas.sql` | Schemas (raw, staging, intermediate, marts, ml), groups, grants |
+| `02_tables.sql` | `raw.landing` table, audit view, ml tables |
 
 ## Running them
 
-### Option A — Snowflake web UI (easiest)
+### Option A — Redshift Query Editor v2 (easiest)
 
-1. Log in to Snowflake as `ACCOUNTADMIN`
-2. Open a new worksheet
-3. Paste each script in order, filling in the placeholders, and run
+1. Log in to AWS Console → Redshift → Query editor v2
+2. Connect to the `data-pipeline` workgroup using admin credentials
+3. Open each SQL file, paste, run
 
-### Option B — SnowSQL CLI
-
-```bash
-snowsql -a <account> -u <admin-user> -f 01_database_warehouse.sql
-# ... etc
-```
-
-## The trust policy handshake (between scripts 02 and 03)
-
-Snowflake storage integrations need a two-sided setup:
-
-1. Run `02_storage_integration.sql`
-2. At the bottom, `DESC INTEGRATION S3_RAW_INTEGRATION` prints two values:
-   - `STORAGE_AWS_IAM_USER_ARN` — Snowflake's IAM user in your account
-   - `STORAGE_AWS_EXTERNAL_ID` — unique external id for this integration
-3. Update the AWS IAM role trust policy:
+### Option B — psql / DBeaver
 
 ```bash
-# Create trust-policy.json
-cat > trust-policy.json <<'EOF'
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": { "AWS": "<STORAGE_AWS_IAM_USER_ARN>" },
-    "Action": "sts:AssumeRole",
-    "Condition": {
-      "StringEquals": { "sts:ExternalId": "<STORAGE_AWS_EXTERNAL_ID>" }
-    }
-  }]
-}
-EOF
+# Get admin password from Secrets Manager
+PASSWORD=$(aws secretsmanager get-secret-value \
+    --secret-id data-pipeline/redshift/admin \
+    --query SecretString --output text | jq -r .password)
 
-aws iam update-assume-role-policy \
-    --role-name data-pipeline-snowflake-integration \
-    --policy-document file://trust-policy.json
+# Get the workgroup endpoint
+ENDPOINT=$(aws redshift-serverless get-workgroup \
+    --workgroup-name data-pipeline \
+    --query 'workgroup.endpoint.address' --output text)
 
-rm trust-policy.json
+PGPASSWORD=$PASSWORD psql -h $ENDPOINT -p 5439 -U admin -d data_pipeline -f 01_schemas.sql
+PGPASSWORD=$PASSWORD psql -h $ENDPOINT -p 5439 -U admin -d data_pipeline -f 02_tables.sql
 ```
 
-4. Then run `03_file_format_stage.sql`. The `LIST @S3_RAW_STAGE` at the bottom
-   verifies the handshake worked — if it returns without error, Snowflake can
-   successfully assume the role and list the bucket.
+Note: the workgroup is in a private subnet, so psql from your laptop won't work
+unless you use a bastion host or VPN. Use Query Editor v2 (which runs inside AWS)
+for simplicity.
 
-## Storing the service user password in SSM
-
-After creating `PIPELINE_USER` in script 01, mirror the password in AWS:
+### Option C — Redshift Data API from your laptop (no network access needed)
 
 ```bash
-aws ssm put-parameter \
-    --name /data-pipeline/snowflake/password \
-    --value "<your-password>" \
-    --type SecureString \
-    --overwrite
+aws redshift-data execute-statement \
+    --workgroup-name data-pipeline \
+    --database data_pipeline \
+    --sql "$(cat 01_schemas.sql)"
+
+aws redshift-data execute-statement \
+    --workgroup-name data-pipeline \
+    --database data_pipeline \
+    --sql "$(cat 02_tables.sql)"
 ```
 
-Same for the other config values (see `SETUP.md` in project root).
+The Data API calls go through the AWS API plane — no network path to the
+cluster needed.

@@ -24,11 +24,11 @@ from pathlib import Path
 
 from check_runner import CheckResult, run_check
 from logger import get_logger, log_event
+from redshift_client import RedshiftClient
 
 
 logger = get_logger("quality_gate")
 
-SSM_PREFIX = os.environ.get("SNOWFLAKE_PARAM_PREFIX", "/data-pipeline/snowflake")
 CHECKS_PATH = Path(__file__).parent / "checks.json"
 
 
@@ -38,24 +38,20 @@ def lambda_handler(event: dict, context) -> dict:
     checks = _load_checks(CHECKS_PATH)
     log_event(logger, "checks_loaded", count=len(checks))
 
-    # Local import so tests can stub without the connector installed
-    from snowflake_client import SnowflakeClient, SnowflakeConfig
-
-    config = SnowflakeConfig.from_ssm(SSM_PREFIX)
+    client = RedshiftClient()
     results: list[CheckResult] = []
 
-    with SnowflakeClient(config) as client:
-        for check in checks:
-            result = run_check(client, check)
-            results.append(result)
-            log_event(
-                logger,
-                "check_completed",
-                name=result.name,
-                passed=result.passed,
-                severity=result.severity,
-                error=result.error,
-            )
+    for check in checks:
+        result = run_check(client, check)
+        results.append(result)
+        log_event(
+            logger,
+            "check_completed",
+            name=result.name,
+            passed=result.passed,
+            severity=result.severity,
+            error=result.error,
+        )
 
     error_failures = [r for r in results if not r.passed and r.severity == "error"]
     warn_failures  = [r for r in results if not r.passed and r.severity == "warn"]

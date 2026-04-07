@@ -1,1 +1,1 @@
-snowflake-connector-python==3.12.3
+# Lambda uses only boto3 (available in runtime) and stdlib.
