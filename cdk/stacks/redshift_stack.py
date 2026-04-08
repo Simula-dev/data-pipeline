@@ -40,10 +40,19 @@ class RedshiftStack(Stack):
         construct_id: str,
         vpc: ec2.IVpc,
         raw_bucket: s3.IBucket,
-        dbt_security_group: ec2.ISecurityGroup,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+
+        # --- dbt Fargate security group (owned here so ComputeStack can  ---
+        # --- depend on RedshiftStack without causing a circular dep)      ---
+        self.dbt_security_group = ec2.SecurityGroup(
+            self,
+            "DbtSecurityGroup",
+            vpc=vpc,
+            description="dbt Fargate tasks \u2014 egress to Redshift + internet",
+            allow_all_outbound=True,
+        )
 
         # ------------------------------------------------------------------ #
         #  IAM role for Redshift \u2014 used by COPY/UNLOAD to read/write S3      #
@@ -91,9 +100,9 @@ class RedshiftStack(Stack):
             description="Redshift Serverless workgroup \u2014 pipeline access only",
             allow_all_outbound=True,
         )
-        # Grant ingress from the dbt Fargate security group (created by ComputeStack)
+        # Grant ingress from the dbt Fargate security group created above
         self.security_group.add_ingress_rule(
-            peer=dbt_security_group,
+            peer=self.dbt_security_group,
             connection=ec2.Port.tcp(5439),
             description="Redshift 5439 from dbt Fargate tasks",
         )
@@ -135,16 +144,17 @@ class RedshiftStack(Stack):
         self.workgroup = workgroup
 
         # ------------------------------------------------------------------ #
-        #  SSM parameters \u2014 read by Lambdas and dbt Fargate at runtime        #
+        #  SSM parameters \u2014 read by dbt Fargate (ComputeStack references     #
+        #  these directly to create cross-stack deploy dependencies)         #
         # ------------------------------------------------------------------ #
-        ssm.StringParameter(
+        self.workgroup_param = ssm.StringParameter(
             self,
             "RedshiftWorkgroupParam",
             parameter_name="/data-pipeline/redshift/workgroup",
             string_value=workgroup.workgroup_name,
             description="Redshift Serverless workgroup name",
         )
-        ssm.StringParameter(
+        self.database_param = ssm.StringParameter(
             self,
             "RedshiftDatabaseParam",
             parameter_name="/data-pipeline/redshift/database",

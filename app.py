@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
 """
 CDK App entry point.
-Instantiates all pipeline stacks and wires cross-stack references.
 
-Dependency graph:
-    Compute  \u2192 VPC + dbt Fargate SG + dbt task def
+Dependency graph (stacks are deployed in this order):
+
+    Network         \u2192 VPC (3 AZs)
     \u2193
-    Redshift \u2192 Serverless namespace/workgroup (uses VPC + grants 5439 from dbt SG)
-    \u2193                                          + writes SSM / Secrets Manager
-    Ingestion \u2192 S3 raw bucket + Lambdas (references Redshift workgroup/db names)
+    Ingestion       \u2192 S3 raw bucket + Lambdas
     \u2193
-    SageMaker \u2192 execution role + model package group (references raw bucket)
+    Redshift        \u2192 Serverless workgroup + dbt SG + admin secret + SSM params
     \u2193
-    Monitoring \u2192 SNS topic + notify Lambda + dashboard
+    Compute         \u2192 ECS cluster + dbt task def + dbt image (uses Redshift creds)
     \u2193
-    Orchestration \u2192 Step Functions state machine (wires all of the above)
+    DataSync        \u2192 staging bucket + DataSync task (independent of Redshift)
+    SageMaker       \u2192 execution role + model package group
+    Monitoring      \u2192 SNS topic + notify Lambda + dashboard (independent)
+    \u2193
+    Orchestration   \u2192 Step Functions state machine (wires everything)
 """
 
 import aws_cdk as cdk
 
-from cdk.stacks.compute_stack import ComputeStack
-from cdk.stacks.redshift_stack import RedshiftStack
+from cdk.stacks.network_stack import NetworkStack
 from cdk.stacks.ingestion_stack import IngestionStack
+from cdk.stacks.redshift_stack import RedshiftStack
+from cdk.stacks.compute_stack import ComputeStack
 from cdk.stacks.datasync_stack import DataSyncStack
 from cdk.stacks.sagemaker_stack import SageMakerStack
 from cdk.stacks.monitoring_stack import MonitoringStack
@@ -35,11 +38,8 @@ env = cdk.Environment(
     region=app.node.try_get_context("region") or "us-east-1",
 )
 
-# Compute first \u2014 owns VPC + dbt Fargate SG + task definition shell
-compute = ComputeStack(app, "DataPipeline-Compute", env=env)
+network = NetworkStack(app, "DataPipeline-Network", env=env)
 
-# Ingestion creates the S3 raw bucket (needed by Redshift + SageMaker + DataSync)
-# It references Redshift workgroup/database by fixed name, so no construct dep.
 ingestion = IngestionStack(
     app,
     "DataPipeline-Ingestion",
@@ -51,13 +51,22 @@ ingestion = IngestionStack(
     env=env,
 )
 
-# Redshift needs VPC + dbt SG from Compute, raw bucket from Ingestion
 redshift = RedshiftStack(
     app,
     "DataPipeline-Redshift",
-    vpc=compute.vpc,
+    vpc=network.vpc,
     raw_bucket=ingestion.raw_bucket,
-    dbt_security_group=compute.dbt_security_group,
+    env=env,
+)
+
+compute = ComputeStack(
+    app,
+    "DataPipeline-Compute",
+    vpc=network.vpc,
+    dbt_security_group=redshift.dbt_security_group,
+    redshift_admin_secret=redshift.admin_secret,
+    redshift_workgroup_param=redshift.workgroup_param,
+    redshift_database_param=redshift.database_param,
     env=env,
 )
 

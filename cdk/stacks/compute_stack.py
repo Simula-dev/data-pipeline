@@ -1,15 +1,10 @@
 """
 ComputeStack \u2014 ECS Fargate cluster + dbt task definition for Redshift.
 
-Networking:
-  - 3-AZ VPC (Redshift Serverless requires 3+ subnets across AZs)
-  - Private subnets with NAT egress for outbound internet (package installs)
-  - Fargate tasks run in private subnets
-
-dbt container:
-  - Built via DockerImageAsset from ./dbt/Dockerfile
-  - Credentials injected at container start via ECS `secrets` integration
-    with AWS Secrets Manager (Redshift admin password) and SSM (host, db)
+Uses VPC from NetworkStack and dbt security group + Redshift credentials
+from RedshiftStack (both passed explicitly to create CloudFormation
+cross-stack references, which makes CDK deploy the stacks in the right
+order).
 """
 
 from aws_cdk import (
@@ -27,39 +22,21 @@ from constructs import Construct
 
 
 class ComputeStack(Stack):
-    @property
-    def availability_zones(self) -> list[str]:
-        return [f"{self.region}a", f"{self.region}b", f"{self.region}c"]
-
     def __init__(
         self,
         scope: Construct,
         construct_id: str,
+        vpc: ec2.IVpc,
+        dbt_security_group: ec2.ISecurityGroup,
+        redshift_admin_secret: secretsmanager.ISecret,
+        redshift_workgroup_param: ssm.IStringParameter,
+        redshift_database_param: ssm.IStringParameter,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # --------------------------------------------------------------- #
-        #  Networking \u2014 3-AZ VPC                                          #
-        # --------------------------------------------------------------- #
-        self.vpc = ec2.Vpc(
-            self,
-            "PipelineVpc",
-            max_azs=3,
-            nat_gateways=1,
-            subnet_configuration=[
-                ec2.SubnetConfiguration(
-                    name="Public",
-                    subnet_type=ec2.SubnetType.PUBLIC,
-                    cidr_mask=24,
-                ),
-                ec2.SubnetConfiguration(
-                    name="Private",
-                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
-                    cidr_mask=24,
-                ),
-            ],
-        )
+        self.vpc = vpc
+        self.dbt_security_group = dbt_security_group
 
         # --------------------------------------------------------------- #
         #  ECS cluster                                                     #
@@ -67,7 +44,7 @@ class ComputeStack(Stack):
         self.cluster = ecs.Cluster(
             self,
             "DbtCluster",
-            vpc=self.vpc,
+            vpc=vpc,
             cluster_name="data-pipeline-dbt",
             container_insights=True,
         )
@@ -84,35 +61,6 @@ class ComputeStack(Stack):
         )
 
         # --------------------------------------------------------------- #
-        #  dbt Fargate security group                                      #
-        #  RedshiftStack takes this as a param and grants 5439 ingress.    #
-        # --------------------------------------------------------------- #
-        self.dbt_security_group = ec2.SecurityGroup(
-            self,
-            "DbtSecurityGroup",
-            vpc=self.vpc,
-            description="dbt Fargate tasks \u2014 egress to Redshift + internet",
-            allow_all_outbound=True,
-        )
-
-        # --------------------------------------------------------------- #
-        #  Import Redshift creds (by well-known name, not cross-stack ref) #
-        #  Avoids a circular dependency with RedshiftStack, which takes    #
-        #  this stack's VPC + dbt SG as inputs.                            #
-        # --------------------------------------------------------------- #
-        admin_secret = secretsmanager.Secret.from_secret_name_v2(
-            self, "RedshiftAdminSecret", "data-pipeline/redshift/admin"
-        )
-
-        def _import_ssm(logical_id: str, name: str) -> ssm.IParameter:
-            return ssm.StringParameter.from_string_parameter_name(
-                self, logical_id, string_parameter_name=name
-            )
-
-        rs_workgroup = _import_ssm("RSWorkgroupParam", "/data-pipeline/redshift/workgroup")
-        rs_database  = _import_ssm("RSDatabaseParam",  "/data-pipeline/redshift/database")
-
-        # --------------------------------------------------------------- #
         #  Task roles                                                      #
         # --------------------------------------------------------------- #
         execution_role = iam.Role(
@@ -126,10 +74,10 @@ class ComputeStack(Stack):
             ],
             description="Pulls image from ECR and fetches secrets at task start",
         )
-        # Grant reads on the secrets / SSM params that get injected
-        admin_secret.grant_read(execution_role)
-        for param in (rs_workgroup, rs_database):
-            param.grant_read(execution_role)
+        # Grants for secret/SSM reads (ECS Agent fetches these at container start)
+        redshift_admin_secret.grant_read(execution_role)
+        redshift_workgroup_param.grant_read(execution_role)
+        redshift_database_param.grant_read(execution_role)
 
         task_role = iam.Role(
             self,
@@ -137,7 +85,6 @@ class ComputeStack(Stack):
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
             description="Runtime permissions for the dbt container",
         )
-        # dbt uses Redshift Data API for some ops (optional) + reads SSM for vars
         task_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["ssm:GetParameter", "ssm:GetParameters"],
@@ -170,9 +117,7 @@ class ComputeStack(Stack):
             task_role=task_role,
         )
 
-        # Redshift Serverless endpoint is deterministic:
-        #   <workgroup>.<account>.<region>.redshift-serverless.amazonaws.com
-        # Workgroup name is fixed in RedshiftStack.
+        # Redshift Serverless endpoint is deterministic
         redshift_host = f"data-pipeline.{self.account}.{self.region}.redshift-serverless.amazonaws.com"
 
         self.dbt_task_definition.add_container(
@@ -187,10 +132,9 @@ class ComputeStack(Stack):
                 "REDSHIFT_HOST": redshift_host,
             },
             secrets={
-                # Secrets Manager JSON secret \u2014 pull individual keys via field
-                "REDSHIFT_USER":     ecs.Secret.from_secrets_manager(admin_secret, field="username"),
-                "REDSHIFT_PASSWORD": ecs.Secret.from_secrets_manager(admin_secret, field="password"),
-                "REDSHIFT_DATABASE": ecs.Secret.from_ssm_parameter(rs_database),
+                "REDSHIFT_USER":     ecs.Secret.from_secrets_manager(redshift_admin_secret, field="username"),
+                "REDSHIFT_PASSWORD": ecs.Secret.from_secrets_manager(redshift_admin_secret, field="password"),
+                "REDSHIFT_DATABASE": ecs.Secret.from_ssm_parameter(redshift_database_param),
             },
             command=["dbt", "build", "--profiles-dir", "/app/dbt"],
         )
