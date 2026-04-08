@@ -50,7 +50,7 @@ class RedshiftStack(Stack):
             self,
             "DbtSecurityGroup",
             vpc=vpc,
-            description="dbt Fargate tasks \u2014 egress to Redshift + internet",
+            description="dbt Fargate tasks - egress to Redshift and internet",
             allow_all_outbound=True,
         )
 
@@ -97,7 +97,7 @@ class RedshiftStack(Stack):
             self,
             "RedshiftSecurityGroup",
             vpc=vpc,
-            description="Redshift Serverless workgroup \u2014 pipeline access only",
+            description="Redshift Serverless workgroup - pipeline access only",
             allow_all_outbound=True,
         )
         # Grant ingress from the dbt Fargate security group created above
