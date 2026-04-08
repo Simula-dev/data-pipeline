@@ -69,22 +69,43 @@ class DataSyncStack(Stack):
             assumed_by=iam.ServicePrincipal("datasync.amazonaws.com"),
             description="Allows DataSync to read from staging and write to raw",
         )
-        self.staging_bucket.grant_read(datasync_role)
-        raw_bucket.grant_read_write(datasync_role)
 
-        # DataSync also needs s3:ListBucket + GetBucketLocation on both
-        datasync_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=[
-                    "s3:GetBucketLocation",
-                    "s3:ListBucket",
-                    "s3:ListBucketMultipartUploads",
-                ],
-                resources=[
-                    self.staging_bucket.bucket_arn,
-                    raw_bucket.bucket_arn,
-                ],
-            )
+        # Explicit iam.Policy (NOT via grant_*) so we can make the DataSync
+        # locations explicitly depend on it. Without this, CloudFormation
+        # creates the CfnLocationS3 resources in parallel with the policy
+        # attachment and DataSync's create-time s3:ListBucket probe fails.
+        datasync_policy = iam.Policy(
+            self,
+            "DataSyncPolicy",
+            roles=[datasync_role],
+            statements=[
+                iam.PolicyStatement(
+                    actions=[
+                        "s3:GetBucketLocation",
+                        "s3:ListBucket",
+                        "s3:ListBucketMultipartUploads",
+                    ],
+                    resources=[
+                        self.staging_bucket.bucket_arn,
+                        raw_bucket.bucket_arn,
+                    ],
+                ),
+                iam.PolicyStatement(
+                    actions=[
+                        "s3:AbortMultipartUpload",
+                        "s3:DeleteObject",
+                        "s3:GetObject",
+                        "s3:GetObjectTagging",
+                        "s3:ListMultipartUploadParts",
+                        "s3:PutObject",
+                        "s3:PutObjectTagging",
+                    ],
+                    resources=[
+                        f"{self.staging_bucket.bucket_arn}/*",
+                        f"{raw_bucket.bucket_arn}/*",
+                    ],
+                ),
+            ],
         )
 
         # --- DataSync source location: staging bucket ---
@@ -98,6 +119,9 @@ class DataSyncStack(Stack):
             s3_storage_class="STANDARD",
             subdirectory="/",
         )
+        # CRITICAL: wait for the IAM policy to be attached before DataSync
+        # tries its create-time access test.
+        source_location.node.add_dependency(datasync_policy)
 
         # --- DataSync destination location: raw bucket, under bulk/ prefix ---
         destination_location = datasync.CfnLocationS3(
@@ -110,6 +134,7 @@ class DataSyncStack(Stack):
             s3_storage_class="STANDARD",
             subdirectory="/bulk/",
         )
+        destination_location.node.add_dependency(datasync_policy)
 
         # --- DataSync task ---
         self.task = datasync.CfnTask(
