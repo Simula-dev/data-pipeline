@@ -3,6 +3,8 @@
 AWS CDK data pipeline — S3 → Redshift Serverless → dbt → SageMaker, orchestrated by Step Functions.
 
 > **Setup instructions:** see [SETUP.md](SETUP.md) for installing Python, Node, CDK, AWS CLI, and running tests.
+>
+> **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md) for the branching strategy, commit conventions, and PR workflow.
 
 ## Build status
 
