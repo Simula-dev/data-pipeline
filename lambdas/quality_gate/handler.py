@@ -24,7 +24,7 @@ from pathlib import Path
 
 from check_runner import CheckResult, run_check
 from logger import get_logger, log_event
-from redshift_client import RedshiftClient
+from postgres_client import PostgresClient
 
 
 logger = get_logger("quality_gate")
@@ -38,10 +38,10 @@ def lambda_handler(event: dict, context) -> dict:
     checks = _load_checks(CHECKS_PATH)
     log_event(logger, "checks_loaded", count=len(checks))
 
-    client = RedshiftClient()
     results: list[CheckResult] = []
 
-    for check in checks:
+    with PostgresClient() as client:
+      for check in checks:
         result = run_check(client, check)
         results.append(result)
         log_event(

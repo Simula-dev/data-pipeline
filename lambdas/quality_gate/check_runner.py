@@ -2,7 +2,7 @@
 Quality check runner.
 
 Each supported check type is implemented as a function taking a check
-definition dict + RedshiftClient and returning a CheckResult.
+definition dict + PostgresClient and returning a CheckResult.
 
 New check types are added by registering a function in CHECK_HANDLERS.
 """
@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
 from logger import get_logger, log_event
-from redshift_client import RedshiftClient
+from postgres_client import PostgresClient
 
 logger = get_logger(__name__)
 
@@ -36,7 +36,7 @@ class CheckResult:
 #  Check implementations                                                       #
 # --------------------------------------------------------------------------- #
 
-def _row_count_min(check: dict, client: RedshiftClient) -> CheckResult:
+def _row_count_min(check: dict, client: PostgresClient) -> CheckResult:
     table = check["table"]
     min_rows = int(check.get("min_rows", 1))
 
@@ -52,14 +52,14 @@ def _row_count_min(check: dict, client: RedshiftClient) -> CheckResult:
     )
 
 
-def _freshness(check: dict, client: RedshiftClient) -> CheckResult:
+def _freshness(check: dict, client: PostgresClient) -> CheckResult:
     table = check["table"]
     ts_col = check.get("timestamp_column", "ingested_at")
     max_age_hours = int(check.get("max_age_hours", 24))
 
-    # Redshift DATEDIFF('hour', earlier, later) returns an integer.
+    # PostgreSQL: extract epoch difference in hours
     sql = (
-        f"SELECT DATEDIFF('hour', MAX({ts_col}), CURRENT_TIMESTAMP) "
+        f"SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MAX({ts_col}))) / 3600 "
         f"FROM {table}"
     )
     hours_since_last = client.fetch_scalar(sql)
@@ -88,7 +88,7 @@ def _freshness(check: dict, client: RedshiftClient) -> CheckResult:
     )
 
 
-def _null_rate(check: dict, client: RedshiftClient) -> CheckResult:
+def _null_rate(check: dict, client: PostgresClient) -> CheckResult:
     table = check["table"]
     column = check["column"]
     max_rate = float(check.get("max_null_rate", 0.0))
@@ -120,7 +120,7 @@ def _null_rate(check: dict, client: RedshiftClient) -> CheckResult:
     )
 
 
-def _uniqueness(check: dict, client: RedshiftClient) -> CheckResult:
+def _uniqueness(check: dict, client: PostgresClient) -> CheckResult:
     table = check["table"]
     columns = check["columns"]
     cols_csv = ", ".join(columns)
@@ -161,7 +161,7 @@ _COMPARISONS: dict[str, Callable[[Any, Any], bool]] = {
 }
 
 
-def _custom_sql(check: dict, client: RedshiftClient) -> CheckResult:
+def _custom_sql(check: dict, client: PostgresClient) -> CheckResult:
     sql = check["sql"]
     comparison = check.get("comparison", "eq")
     expected = check.get("expected_value", 0)
@@ -203,7 +203,7 @@ def _custom_sql(check: dict, client: RedshiftClient) -> CheckResult:
     )
 
 
-CHECK_HANDLERS: dict[str, Callable[[dict, RedshiftClient], CheckResult]] = {
+CHECK_HANDLERS: dict[str, Callable[[dict, PostgresClient], CheckResult]] = {
     "row_count_min": _row_count_min,
     "freshness": _freshness,
     "null_rate": _null_rate,
@@ -212,7 +212,7 @@ CHECK_HANDLERS: dict[str, Callable[[dict, RedshiftClient], CheckResult]] = {
 }
 
 
-def run_check(client: RedshiftClient, check: dict) -> CheckResult:
+def run_check(client: PostgresClient, check: dict) -> CheckResult:
     """Dispatch to the appropriate handler, wrapping unexpected errors."""
     check_type = check.get("type")
     handler = CHECK_HANDLERS.get(check_type)

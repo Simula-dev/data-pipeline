@@ -1,10 +1,5 @@
 """
-ComputeStack \u2014 ECS Fargate cluster + dbt task definition for Redshift.
-
-Uses VPC from NetworkStack and dbt security group + Redshift credentials
-from RedshiftStack (both passed explicitly to create CloudFormation
-cross-stack references, which makes CDK deploy the stacks in the right
-order).
+ComputeStack \u2014 ECS Fargate cluster + dbt task definition for RDS PostgreSQL.
 """
 
 from aws_cdk import (
@@ -27,16 +22,16 @@ class ComputeStack(Stack):
         scope: Construct,
         construct_id: str,
         vpc: ec2.IVpc,
-        dbt_security_group: ec2.ISecurityGroup,
-        redshift_admin_secret: secretsmanager.ISecret,
-        redshift_workgroup_param: ssm.IStringParameter,
-        redshift_database_param: ssm.IStringParameter,
+        pipeline_security_group: ec2.ISecurityGroup,
+        rds_admin_secret: secretsmanager.ISecret,
+        rds_host_param: ssm.IStringParameter,
+        rds_database_param: ssm.IStringParameter,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         self.vpc = vpc
-        self.dbt_security_group = dbt_security_group
+        self.pipeline_security_group = pipeline_security_group
 
         # --------------------------------------------------------------- #
         #  ECS cluster                                                     #
@@ -50,7 +45,7 @@ class ComputeStack(Stack):
         )
 
         # --------------------------------------------------------------- #
-        #  dbt Docker image \u2014 built during `cdk deploy`                    #
+        #  dbt Docker image                                                #
         # --------------------------------------------------------------- #
         dbt_image_asset = ecr_assets.DockerImageAsset(
             self,
@@ -74,10 +69,9 @@ class ComputeStack(Stack):
             ],
             description="Pulls image from ECR and fetches secrets at task start",
         )
-        # Grants for secret/SSM reads (ECS Agent fetches these at container start)
-        redshift_admin_secret.grant_read(execution_role)
-        redshift_workgroup_param.grant_read(execution_role)
-        redshift_database_param.grant_read(execution_role)
+        rds_admin_secret.grant_read(execution_role)
+        rds_host_param.grant_read(execution_role)
+        rds_database_param.grant_read(execution_role)
 
         task_role = iam.Role(
             self,
@@ -95,7 +89,7 @@ class ComputeStack(Stack):
         )
 
         # --------------------------------------------------------------- #
-        #  CloudWatch log group for container output                       #
+        #  Log group                                                       #
         # --------------------------------------------------------------- #
         log_group = logs.LogGroup(
             self,
@@ -117,9 +111,6 @@ class ComputeStack(Stack):
             task_role=task_role,
         )
 
-        # Redshift Serverless endpoint is deterministic
-        redshift_host = f"data-pipeline.{self.account}.{self.region}.redshift-serverless.amazonaws.com"
-
         self.dbt_task_definition.add_container(
             "DbtContainer",
             image=ecs.ContainerImage.from_docker_image_asset(dbt_image_asset),
@@ -129,12 +120,12 @@ class ComputeStack(Stack):
             ),
             environment={
                 "DBT_PROFILES_DIR": "/app/dbt",
-                "REDSHIFT_HOST": redshift_host,
             },
             secrets={
-                "REDSHIFT_USER":     ecs.Secret.from_secrets_manager(redshift_admin_secret, field="username"),
-                "REDSHIFT_PASSWORD": ecs.Secret.from_secrets_manager(redshift_admin_secret, field="password"),
-                "REDSHIFT_DATABASE": ecs.Secret.from_ssm_parameter(redshift_database_param),
+                "POSTGRES_USER":     ecs.Secret.from_secrets_manager(rds_admin_secret, field="username"),
+                "POSTGRES_PASSWORD": ecs.Secret.from_secrets_manager(rds_admin_secret, field="password"),
+                "POSTGRES_HOST":     ecs.Secret.from_ssm_parameter(rds_host_param),
+                "POSTGRES_DATABASE": ecs.Secret.from_ssm_parameter(rds_database_param),
             },
             command=["dbt", "build", "--profiles-dir", "/app/dbt"],
         )

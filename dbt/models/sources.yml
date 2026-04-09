@@ -3,31 +3,23 @@ version: 2
 sources:
   - name: raw
     description: "Raw landing zone populated by the load Lambda."
-    database: "{{ env_var('REDSHIFT_DATABASE', 'data_pipeline') }}"
+    database: "{{ env_var('POSTGRES_DATABASE', 'data_pipeline') }}"
     schema: raw
     tables:
       - name: landing
-        description: "Unified SUPER landing table \u2014 all ingested sources."
+        description: "Unified jsonb landing table - all ingested sources."
         loaded_at_field: ingested_at
         freshness:
           warn_after:  {count: 12, period: hour}
           error_after: {count: 48, period: hour}
         columns:
           - name: load_id
-            description: "Lambda request id for the load that inserted this row."
-            tests:
-              - not_null
+            tests: [not_null]
           - name: source
-            description: "Logical source name (matches ingest event source_name)."
-            tests:
-              - not_null
+            tests: [not_null]
           - name: file_path
-            description: "S3 object key."
           - name: ingested_at
-            description: "Load timestamp."
-            tests:
-              - not_null
+            tests: [not_null]
           - name: data
-            description: "Full JSON record as Redshift SUPER type."
-            tests:
-              - not_null
+            description: "Full JSON record as PostgreSQL jsonb type."
+            tests: [not_null]

@@ -1,1 +1,1 @@
-# Lambda uses only boto3 (available in runtime) and stdlib.
+pg8000>=1.31.0

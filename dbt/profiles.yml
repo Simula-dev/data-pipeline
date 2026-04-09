@@ -1,37 +1,32 @@
-# dbt connection profile for Redshift Serverless.
+# dbt connection profile for RDS PostgreSQL.
 #
 # Credentials are injected as environment variables by the ECS task at
-# container start. ECS pulls them from SSM Parameter Store via the
-# `secrets` block in the task definition (see cdk/stacks/compute_stack.py).
-#
-# Do NOT commit real credentials here.
+# container start via the `secrets` block in compute_stack.py.
 
 data_pipeline:
   target: prod
   outputs:
 
     prod:
-      type: redshift
-      host:     "{{ env_var('REDSHIFT_HOST') }}"
-      port:     5439
-      user:     "{{ env_var('REDSHIFT_USER', 'admin') }}"
-      password: "{{ env_var('REDSHIFT_PASSWORD') }}"
-      dbname:   "{{ env_var('REDSHIFT_DATABASE', 'data_pipeline') }}"
-      schema:   raw
-      threads: 8
-      ra3_node: true
-      sslmode: require
-      keepalives_idle: 240
-      connect_timeout: 30
-
-    dev:
-      type: redshift
-      host:     "{{ env_var('REDSHIFT_HOST') }}"
-      port:     5439
-      user:     "{{ env_var('REDSHIFT_USER', 'admin') }}"
-      password: "{{ env_var('REDSHIFT_PASSWORD') }}"
-      dbname:   "{{ env_var('REDSHIFT_DATABASE', 'data_pipeline') }}"
+      type: postgres
+      host:     "{{ env_var('POSTGRES_HOST') }}"
+      port:     5432
+      user:     "{{ env_var('POSTGRES_USER', 'admin') }}"
+      pass:     "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname:   "{{ env_var('POSTGRES_DATABASE', 'data_pipeline') }}"
       schema:   raw
       threads: 4
-      ra3_node: true
+      keepalives_idle: 240
+      connect_timeout: 30
+      sslmode: require
+
+    dev:
+      type: postgres
+      host:     "{{ env_var('POSTGRES_HOST') }}"
+      port:     5432
+      user:     "{{ env_var('POSTGRES_USER', 'admin') }}"
+      pass:     "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname:   "{{ env_var('POSTGRES_DATABASE', 'data_pipeline') }}"
+      schema:   raw
+      threads: 4
       sslmode: require

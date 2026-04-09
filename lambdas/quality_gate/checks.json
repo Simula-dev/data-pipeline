@@ -44,7 +44,7 @@
   {
     "name": "predictions_recent",
     "type": "custom_sql",
-    "sql": "SELECT COUNT(*) FROM marts.ml_predictions WHERE predicted_at >= DATEADD(day, -7, CURRENT_TIMESTAMP)",
+    "sql": "SELECT COUNT(*) FROM marts.ml_predictions WHERE predicted_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'",
     "comparison": "gte",
     "expected_value": 0,
     "severity": "warn",

@@ -1,25 +1,26 @@
 """
-ML Load Lambda \u2014 COPY Batch Transform output CSV into marts.ml_predictions.
-
-Uses Redshift COPY FROM S3. Similar temp-table pattern to the main load
-Lambda: COPY into a staging temp table (single prediction column), then
-INSERT into the target with load_id + timestamp.
+ML Load Lambda \u2014 read Batch Transform output CSV from S3, INSERT into
+marts.ml_predictions in PostgreSQL.
 """
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import os
 from urllib.parse import urlparse
 
+import boto3
+
 from logger import get_logger, log_event
-from redshift_client import RedshiftClient, RedshiftError
+from postgres_client import PostgresClient
 
 
 logger = get_logger("ml_load")
+s3_client = boto3.client("s3")
 
-REDSHIFT_S3_ROLE_ARN = os.environ["REDSHIFT_S3_ROLE_ARN"]
 PREDICTIONS_TABLE = os.environ.get("ML_PREDICTIONS_TABLE", "marts.ml_predictions")
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -34,45 +35,44 @@ def lambda_handler(event: dict, context) -> dict:
         or getattr(context, "aws_request_id", "local-test")
     )
 
-    client = RedshiftClient()
+    # Parse S3 URI and list objects under the prefix
+    parsed = urlparse(s3_output_path)
+    bucket = parsed.netloc
+    prefix = parsed.path.lstrip("/")
 
-    statements = [
-        "DROP TABLE IF EXISTS pred_stage;",
-        "CREATE TEMP TABLE pred_stage (prediction VARCHAR(65535));",
-        (
-            f"COPY pred_stage (prediction) "
-            f"FROM '{s3_output_path}' "
-            f"IAM_ROLE '{REDSHIFT_S3_ROLE_ARN}' "
-            f"FORMAT AS CSV IGNOREHEADER 1 "
-            f"REGION AS '{AWS_REGION}';"
-        ),
-        (
-            f"INSERT INTO {PREDICTIONS_TABLE} (load_id, predicted_at, prediction) "
-            f"SELECT '{_quote(run_id)}', GETDATE(), prediction::SUPER "
-            f"FROM pred_stage;"
-        ),
-        "DROP TABLE pred_stage;",
-    ]
+    resp = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    keys = [obj["Key"] for obj in resp.get("Contents", []) if obj["Key"].endswith(".out")]
 
-    try:
-        _run_batch(client, statements)
-    except RedshiftError as exc:
-        log_event(
-            logger,
-            "ml_load_redshift_error",
-            statement_id=exc.statement_id,
-            status=exc.status,
-            error=str(exc),
-        )
-        raise
+    if not keys:
+        return {"status": "SKIPPED", "reason": "no .out files in transform output", "rowsLoaded": 0}
 
-    rows_loaded = _count_loaded_rows(client, PREDICTIONS_TABLE, run_id)
+    total_loaded = 0
+    with PostgresClient() as client:
+        for key in keys:
+            obj = s3_client.get_object(Bucket=bucket, Key=key)
+            body = obj["Body"].read().decode("utf-8")
+            reader = csv.reader(io.StringIO(body))
+            # Skip header if present
+            rows = list(reader)
+            if rows and rows[0] and rows[0][0] == "prediction":
+                rows = rows[1:]
+
+            for row in rows:
+                prediction_value = row[0] if row else None
+                if prediction_value is not None:
+                    client.execute(
+                        f"INSERT INTO {PREDICTIONS_TABLE} (load_id, predicted_at, prediction) "
+                        f"VALUES (:p1, NOW(), CAST(:p2 AS jsonb))",
+                        (run_id, json.dumps(prediction_value)),
+                    )
+                    total_loaded += 1
+        client.commit()
 
     summary = {
         "loadId": run_id,
         "s3OutputPath": s3_output_path,
-        "rowsLoaded": rows_loaded,
-        "filesLoaded": 1,
+        "rowsLoaded": total_loaded,
+        "filesLoaded": len(keys),
         "status": "LOADED",
     }
     log_event(logger, "ml_load_complete", **summary)
@@ -86,44 +86,3 @@ def _extract_output_path(event: dict) -> str | None:
         if output:
             return output.get("S3OutputPath") or output.get("s3OutputPath")
     return None
-
-
-def _run_batch(client: RedshiftClient, statements: list[str]) -> None:
-    """Execute statements in a single session so the TEMP TABLE is visible to COPY/INSERT."""
-    import boto3
-    import time
-    rs = boto3.client("redshift-data")
-
-    resp = rs.batch_execute_statement(
-        WorkgroupName=client.workgroup,
-        Database=client.database,
-        Sqls=statements,
-        WithEvent=False,
-    )
-    statement_id = resp["Id"]
-    log_event(logger, "redshift_batch_submitted", id=statement_id, count=len(statements))
-
-    deadline = time.monotonic() + client.default_timeout
-    while time.monotonic() < deadline:
-        desc = rs.describe_statement(Id=statement_id)
-        status = desc["Status"]
-        if status == "FINISHED":
-            return
-        if status in ("FAILED", "ABORTED"):
-            raise RedshiftError(
-                f"Batch {status}: {desc.get('Error', 'no details')}",
-                statement_id=statement_id,
-                status=status,
-                details=desc,
-            )
-        time.sleep(client.poll_interval)
-    raise TimeoutError(f"Batch {statement_id} did not finish in {client.default_timeout}s")
-
-
-def _count_loaded_rows(client: RedshiftClient, table: str, load_id: str) -> int:
-    sql = f"SELECT COUNT(*) FROM {table} WHERE load_id = '{_quote(load_id)}'"
-    return int(client.fetch_scalar(sql) or 0)
-
-
-def _quote(value: str) -> str:
-    return str(value).replace("'", "''")
