@@ -61,7 +61,7 @@ wizard triggers service enrollment on the account.
 
 ### Authoritative backlog
 
-https://github.com/entity-black/data-pipeline/issues
+https://github.com/simula-dev/data-pipeline/issues
 
 Current open issues:
 
@@ -264,8 +264,8 @@ export PATH="/c/Program Files/Docker/Docker/resources/bin:/c/Program Files/Amazo
 
 **AWS account:** `004947744611` in `us-east-1`
 **IAM user:** `data-pipeline-admin` (AdministratorAccess)
-**GitHub user:** `entity-black`
-**Repo:** https://github.com/entity-black/data-pipeline (private)
+**GitHub user:** `simula-dev`
+**Repo:** https://github.com/simula-dev/data-pipeline (public)
 
 ---
 
