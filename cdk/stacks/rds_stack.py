@@ -88,7 +88,7 @@ class RDSStack(Stack):
             storage_type=rds.StorageType.GP2,
             multi_az=False,
             publicly_accessible=False,
-            backup_retention=Duration.days(7),
+            backup_retention=Duration.days(1),  # free tier limit
             deletion_protection=False,
             removal_policy=RemovalPolicy.DESTROY,
             auto_minor_version_upgrade=True,
