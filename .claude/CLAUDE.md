@@ -1,15 +1,13 @@
-# CLAUDE.md
+# Developer Context
 
-**Purpose:** context for Claude Code (or any future Claude instance) working
-in this repository. Exists so that a new session can become productive
-within minutes without reconstructing project state from conversation history.
+Quick-reference for getting up to speed on this project. Covers current
+status, architecture decisions, known gotchas, and how to resume work.
 
-**Keep it updated.** At the end of any session that changes the architecture,
-completes a major milestone, or discovers a new gotcha, update this file.
+Keep this updated when the architecture changes or a major milestone lands.
 Authoritative sources:
 - **Task state** → GitHub issues
 - **Architecture state** → the code
-- **Narrative layer tying them together** → this file
+- **Narrative context** → this file
 
 ---
 
