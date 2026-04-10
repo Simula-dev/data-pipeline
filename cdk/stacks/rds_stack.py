@@ -80,7 +80,7 @@ class RDSStack(Stack):
             security_groups=[rds_sg],
             database_name="data_pipeline",
             credentials=rds.Credentials.from_generated_secret(
-                "admin",
+                "dbadmin",
                 secret_name="data-pipeline/rds/admin",
             ),
             allocated_storage=20,
