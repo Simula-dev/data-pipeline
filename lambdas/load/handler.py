@@ -63,15 +63,21 @@ def lambda_handler(event: dict, context) -> dict:
         }
 
     # Batch INSERT into raw.landing
+    # pg8000 native interface uses :name placeholders with keyword args
     insert_sql = (
         f"INSERT INTO {RAW_SCHEMA}.{LANDING_TABLE} "
         f"(load_id, source, file_path, ingested_at, data) "
-        f"VALUES (:p1, :p2, :p3, NOW(), CAST(:p4 AS jsonb))"
+        f"VALUES (:load_id, :source, :file_path, NOW(), CAST(:data AS jsonb))"
     )
 
     with PostgresClient() as client:
         params_list = [
-            (load_id, source, s3_key, json.dumps(record))
+            {
+                "load_id": load_id,
+                "source": source,
+                "file_path": s3_key,
+                "data": json.dumps(record),
+            }
             for record in records
         ]
         rows_loaded = client.execute_many(insert_sql, params_list)

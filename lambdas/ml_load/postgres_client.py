@@ -55,33 +55,36 @@ class PostgresClient:
                 pass
             self._conn = None
 
-    def execute(self, sql: str, params: tuple | None = None) -> None:
-        """Execute a statement (no result set expected)."""
+    def execute(self, sql: str, **params) -> None:
+        """Execute a statement (no result set expected).
+        pg8000 native uses :name placeholders with keyword args:
+            client.execute("INSERT INTO t VALUES (:a, :b)", a=1, b='hi')
+        """
         assert self._conn is not None
         log_event(logger, "postgres_execute", sql_preview=sql[:200])
-        self._conn.run(sql, params or ())
+        self._conn.run(sql, **params)
 
-    def execute_many(self, sql: str, params_list: list[tuple]) -> int:
-        """Execute a parameterized statement for each set of params. Returns row count."""
+    def execute_many(self, sql: str, params_list: list[dict]) -> int:
+        """Execute a parameterized statement for each set of params (as dicts)."""
         assert self._conn is not None
         count = 0
         for params in params_list:
-            self._conn.run(sql, params)
+            self._conn.run(sql, **params)
             count += 1
         return count
 
-    def fetch_scalar(self, sql: str, params: tuple | None = None) -> Any:
+    def fetch_scalar(self, sql: str, **params) -> Any:
         """Execute a query and return the first column of the first row."""
         assert self._conn is not None
-        rows = self._conn.run(sql, params or ())
+        rows = self._conn.run(sql, **params)
         if not rows:
             return None
         return rows[0][0]
 
-    def fetch_all(self, sql: str, params: tuple | None = None) -> list[tuple]:
+    def fetch_all(self, sql: str, **params) -> list[tuple]:
         """Execute a query and return all rows."""
         assert self._conn is not None
-        return self._conn.run(sql, params or ())
+        return self._conn.run(sql, **params)
 
     def commit(self) -> None:
         assert self._conn is not None

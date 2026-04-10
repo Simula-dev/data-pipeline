@@ -62,8 +62,8 @@ def lambda_handler(event: dict, context) -> dict:
                 if prediction_value is not None:
                     client.execute(
                         f"INSERT INTO {PREDICTIONS_TABLE} (load_id, predicted_at, prediction) "
-                        f"VALUES (:p1, NOW(), CAST(:p2 AS jsonb))",
-                        (run_id, json.dumps(prediction_value)),
+                        f"VALUES (:lid, NOW(), CAST(:pred AS jsonb))",
+                        lid=run_id, pred=json.dumps(prediction_value),
                     )
                     total_loaded += 1
         client.commit()

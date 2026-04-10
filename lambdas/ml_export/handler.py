@@ -54,9 +54,9 @@ def lambda_handler(event: dict, context) -> dict:
         # Get column names from a LIMIT 0 query description
         col_rows = client.fetch_all(
             f"SELECT column_name FROM information_schema.columns "
-            f"WHERE table_schema || '.' || table_name = :p1 "
+            f"WHERE table_schema || '.' || table_name = :tbl "
             f"ORDER BY ordinal_position",
-            (ML_INFERENCE_INPUT_TABLE,),
+            tbl=ML_INFERENCE_INPUT_TABLE,
         )
         columns = [r[0] for r in col_rows] if col_rows else [f"col_{i}" for i in range(len(rows[0]))]
 
