@@ -1,20 +1,14 @@
 # Contributing
 
-This repo uses **GitHub flow** with category-prefixed branches. The design
-favors simplicity (solo developer, short-lived branches) while keeping the
-commit history clean enough to read as a portfolio artifact.
+This repo follows GitHub flow with category-prefixed branches. It's a solo project, so the process is lightweight - short-lived branches, squash merges, clean history that reads well as a portfolio piece.
 
-## Branching rules
+## Branching
 
-1. **`main` is always deployable.** CI (`test` + `synth`) must pass before
-   any merge.
-2. **Never commit directly to `main`.** Every change \u2014 including docs,
-   typo fixes, and dependency bumps \u2014 goes through a branch and a PR.
-3. **Branches are short-lived.** Aim to merge within 1-2 days. Long-running
-   branches accumulate drift and merge conflicts.
-4. **Delete branches after merge.** Both locally and on the remote.
-5. **Squash-merge by default.** Keeps `main` history as one commit per PR,
-   regardless of how many WIP commits happened on the branch.
+`main` is always deployable. CI runs tests and `cdk synth` on every PR, and nothing gets merged until both pass.
+
+Every change goes through a branch and a PR, even docs and typo fixes. Branches should be short-lived - aim to merge within a day or two. Delete them after merge, both locally and on the remote.
+
+Squash-merge is the default. That keeps `main` history as one clean commit per PR, regardless of how many messy WIP commits happened along the way.
 
 ## Branch naming
 
@@ -25,27 +19,20 @@ Format: `<category>/<kebab-case-description>`
 | `feature/` | New capability or user-visible functionality | `feature/add-kaggle-ingest` |
 | `fix/` | Bug fix | `fix/datasync-iam-race` |
 | `refactor/` | Internal restructuring, no behavior change | `refactor/split-network-stack` |
-| `infra/` | CDK stacks / AWS resource changes | `infra/add-redshift-alarm` |
+| `infra/` | CDK stacks / AWS resource changes | `infra/add-rds-alarm` |
 | `ci/` | GitHub Actions, workflow files | `ci/cache-pip-downloads` |
 | `docs/` | Documentation only | `docs/branching-strategy` |
 | `chore/` | Dependency bumps, housekeeping | `chore/bump-dbt-1.9` |
 
-Pick the most specific category. `infra` beats `feature` when the change
-is purely a CDK stack edit. `fix` beats `refactor` when the change
-corrects a real bug vs. just cleaning up.
+Pick the most specific category. `infra` beats `feature` when the change is purely a CDK stack edit. `fix` beats `refactor` when the change corrects a real bug vs. just cleaning things up.
 
 ## Commit messages
 
-- **Lowercase, present tense.** `add kaggle ingest handler` not
-  `Added kaggle handler` or `Adding kaggle handler`.
-- **Subject line \u2264 72 chars.**
-- **Body explains WHY, not WHAT.** The diff shows what changed; the
-  commit body explains the context, the alternative you rejected, or
-  the subtle interaction with another system.
-- **One logical change per commit.** If you find yourself writing "and"
-  in the subject, split into two commits.
+Lowercase, present tense. `add kaggle ingest handler` not `Added kaggle handler`.
 
-Example:
+Keep the subject line under 72 characters. The body should explain *why*, not *what* - the diff already shows what changed. If you're writing "and" in the subject, it's probably two commits.
+
+Good example:
 
 ```
 fix: datasync location creation races the iam policy attachment
@@ -62,68 +49,42 @@ Fix: replace grant_* with an explicit iam.Policy, then add
 
 ## Pull requests
 
-### Title
+Title follows the same style as a commit message. If the PR is a single squash-merged commit, the PR title becomes the final commit subject.
 
-Same style as a commit message. If the PR has one commit and will be
-squash-merged, the PR title becomes the final commit subject.
+For the description, use the template at `.github/pull_request_template.md`. Cover what changed, why, how you tested it, and any related issues (use `Closes #N` to auto-close them).
 
-### Description
+Every PR triggers two CI checks:
+- `test` - the pytest suite
+- `synth` - `cdk synth --all` with a dummy account ID
 
-Use the template at `.github/pull_request_template.md`. Answer:
-- **What** changed
-- **Why** it changed
-- **How** it was tested
-- **Related** issues (use `Closes #N` to auto-close)
+The deploy job only runs on pushes to `main` (gated behind `vars.DEPLOY_ENABLED`), so PRs won't accidentally trigger deploys.
 
-### CI
-
-Every PR triggers:
-- `test` \u2014 pytest suite (must pass)
-- `synth` \u2014 `cdk synth --all` with a dummy account ID (must pass)
-
-The `deploy` job is gated behind `vars.DEPLOY_ENABLED == 'true'` and
-only runs on `main` branch pushes, so PRs don't trigger deploys.
-
-### Review policy
-
-This is a solo project; self-review the diff on the PR page before
-merging. That one extra pass catches more issues than you'd expect.
+Since this is a solo project, the review step is a self-review on the PR page before hitting merge. That extra pass catches more issues than you'd think.
 
 ## Issue tracking
 
-Open GitHub issues for:
-- **Bugs** \u2014 even ones you plan to fix yourself. Creates an audit trail
-  and lets you reference from the fix PR.
-- **Features** \u2014 describe the what and the why before starting the branch.
-- **Blockers** \u2014 external dependencies (e.g., waiting on account
-  enrollment, service availability, design decisions).
-
-Reference issues from PRs with `Closes #N` to auto-close on merge.
+Open GitHub issues for bugs, features, and blockers - even ones you plan to fix immediately. It creates an audit trail and lets you cross-reference from PRs with `Closes #N`.
 
 ## Running tests locally
 
 ```bash
-# One-time setup
 python -m venv .venv
 .venv/Scripts/activate    # Windows
 # source .venv/bin/activate  # Mac/Linux
 pip install -r requirements-dev.txt
 
-# Run the test suite
 pytest tests/ -v
 ```
 
 ## Validating CDK locally
 
-Requires Docker Desktop running (for the dbt `DockerImageAsset`).
+Requires Docker Desktop running (for the dbt `DockerImageAsset`):
 
 ```bash
 cdk synth --all
 ```
 
-No AWS credentials are required for `cdk synth` \u2014 the Network, Compute,
-and Redshift stacks have AZ overrides that avoid `DescribeAvailabilityZones`
-calls, so synth works fully offline.
+No AWS credentials needed for synth. The Network and RDS stacks have AZ overrides that skip `DescribeAvailabilityZones` calls, so it works fully offline.
 
 ## Deploying
 
@@ -131,4 +92,4 @@ calls, so synth works fully offline.
 cdk deploy --all --context alert_email=you@example.com
 ```
 
-See `SETUP.md` for first-time account prep (CDK bootstrap, IAM user, etc.).
+See [SETUP.md](SETUP.md) for first-time account prep (CDK bootstrap, IAM, etc.).

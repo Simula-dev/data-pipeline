@@ -1,8 +1,10 @@
 # Local Development Setup
 
-Complete guide for getting the data pipeline running locally and deployed to AWS.
+This walks you through everything you need to get the pipeline running locally and deployed to your AWS account. It looks like a lot of steps, but most of it is one-time setup that you won't touch again.
 
-## 1. Install prerequisites
+## What you'll need
+
+Before diving in, make sure you have these installed. If you're on Windows, `winget` makes this painless. Mac/Linux equivalents are straightforward - just swap the install commands.
 
 ### Python 3.12+
 ```powershell
@@ -10,7 +12,7 @@ winget install Python.Python.3.12
 ```
 Verify: `python --version`
 
-### Node.js 20+ (for AWS CDK CLI)
+### Node.js 20+ (for the CDK CLI)
 ```powershell
 winget install OpenJS.NodeJS
 ```
@@ -22,7 +24,7 @@ winget install Amazon.AWSCLI
 ```
 Verify: `aws --version`
 
-Then configure credentials:
+Then configure your credentials:
 ```bash
 aws configure
 # Enter access key, secret, region (us-east-1), output (json)
@@ -34,82 +36,89 @@ npm install -g aws-cdk
 cdk --version
 ```
 
-### Docker Desktop (for dbt image build)
-Only needed locally if you want to run `cdk synth --all` or `cdk deploy`
-against the dbt `DockerImageAsset`. Lambda bundling is NOT required — all
-Lambdas use the Redshift Data API via boto3 (in the runtime).
+### Docker Desktop (optional)
+
+You only need Docker if you want to run `cdk synth --all` or `cdk deploy` locally, since the dbt stack uses a `DockerImageAsset`. The Lambda functions don't need it - they use pg8000 (pure Python) which gets bundled locally without Docker.
+
 <https://www.docker.com/products/docker-desktop/>
 
-## 2. Clone and set up the project
+## Clone and set up the project
+
+Pretty standard Python project setup here:
 
 ```bash
 git clone <your-new-repo-url> data-pipeline
 cd data-pipeline
 
-# Create venv
+# Create a virtualenv
 python -m venv .venv
 .venv\Scripts\activate     # Windows
 # source .venv/bin/activate  # Mac/Linux
 
-# Install Python deps (CDK + boto3 + pytest + moto)
+# Install everything (CDK + boto3 + pytest + moto)
 pip install -r requirements-dev.txt
 
-# Run the test suite (no AWS credentials required)
+# Make sure the tests pass before going further
 pytest tests/ -v
 ```
 
-## 3. Configure your AWS account
+The test suite is fully mocked with moto, so you don't need AWS credentials to run it.
 
-Edit `cdk.json` and replace `YOUR_AWS_ACCOUNT_ID` with your real account ID:
+## Configure your AWS account
+
+Open `cdk.json` and replace `YOUR_AWS_ACCOUNT_ID` with your actual account ID:
 ```json
 "account": "123456789012",
 "region": "us-east-1"
 ```
 
-Bootstrap CDK in your account (one-time per account/region):
+Then bootstrap CDK in your account. This is a one-time thing per account/region:
 ```bash
 cdk bootstrap aws://123456789012/us-east-1
 ```
 
-## 4. Validate stacks synthesize locally
+## Validate locally before deploying
+
+This is a good sanity check. It synthesizes all the CloudFormation templates without actually deploying anything:
 
 ```bash
 cdk synth --all --context alert_email=you@example.com
 ```
 
-Should produce 7 CloudFormation templates under `cdk.out/`:
+You should see 8 templates under `cdk.out/`:
+- `DataPipeline-Network`
+- `DataPipeline-RDS`
 - `DataPipeline-Compute`
-- `DataPipeline-Redshift`
 - `DataPipeline-Ingestion`
 - `DataPipeline-DataSync`
 - `DataPipeline-SageMaker`
 - `DataPipeline-Monitoring`
 - `DataPipeline-Orchestration`
 
-## 5. Deploy the infrastructure
+## Deploy the infrastructure
+
+Here's the big moment:
 
 ```bash
 cdk deploy --all --context alert_email=you@example.com --require-approval never
 ```
 
-First deploy takes ~15-20 minutes. Watch for the stack outputs at the end:
-- `DataPipeline-Redshift.AdminSecretArn` — Secrets Manager ARN with the Redshift admin password
-- `DataPipeline-Redshift.WorkgroupName` — should be `data-pipeline`
-- `DataPipeline-Ingestion.RawBucketName` — the S3 raw bucket
+First deploy takes 15-20 minutes (the RDS instance is the slow part). Grab some coffee. When it finishes, look for these stack outputs:
+- `DataPipeline-RDS.AdminSecretArn` - Secrets Manager ARN with your PostgreSQL admin password
+- `DataPipeline-RDS.RDSEndpoint` - the database hostname
+- `DataPipeline-Ingestion.RawBucketName` - your S3 raw bucket
 
-## 6. Run the Redshift setup SQL
+## Run the database setup SQL
 
-Follow `sql/setup/README.md`. Quick version via Redshift Query Editor v2:
+The database needs schemas and tables before the pipeline can load data. Full details are in `sql/setup/README.md`. Since the RDS instance is in a private subnet, the easiest way is to use a temporary Lambda or connect via the admin credentials from Secrets Manager.
 
-1. AWS Console → Redshift → Query editor v2
-2. Connect to the `data-pipeline` workgroup using admin credentials
-   (retrieve from Secrets Manager: `data-pipeline/redshift/admin`)
-3. Open and run `sql/setup/01_schemas.sql`
-4. Open and run `sql/setup/02_tables.sql`
+The SQL scripts to run (in order):
+1. `sql/setup/01_schemas.sql` - creates schemas, roles, and grants
+2. `sql/setup/02_tables.sql` - creates the landing table, ML tables, and audit views
 
-## 7. (Optional) Store API keys for HTTP ingest sources
+## (Optional) Store API keys for ingest sources
 
-If your ingest sources need authentication (GitHub PAT, etc.):
+If your data sources need authentication (like a GitHub PAT), store them in SSM Parameter Store:
 ```bash
 aws ssm put-parameter \
   --name /data-pipeline/secrets/github_token \
@@ -117,7 +126,9 @@ aws ssm put-parameter \
   --type SecureString
 ```
 
-## 8. Trigger a pipeline run
+## Trigger your first pipeline run
+
+Now for the fun part. The `examples/` folder has ready-to-use event payloads. The simplest one pulls from JSONPlaceholder - no auth needed, no extra setup:
 
 ```bash
 aws stepfunctions start-execution \
@@ -125,12 +136,10 @@ aws stepfunctions start-execution \
   --input file://examples/event_jsonplaceholder.json
 ```
 
-See `examples/` for ready-to-use event payloads. The simplest is
-`event_jsonplaceholder.json` — no auth, no setup beyond the infrastructure.
+## Watching it run
 
-## 9. Monitor the execution
+Once the execution starts, you've got a few ways to follow along:
 
-- **Step Functions console**: watch the visual state machine graph
-- **CloudWatch dashboard**: `data-pipeline` dashboard
-- **Notify SNS topic**: `data-pipeline-notifications` — subscribe your email
-  via the `alert_email` context arg or manually via the SNS console
+- **Step Functions console** has a visual graph that updates in real time as each step completes or fails. This is the best view for debugging.
+- **CloudWatch dashboard** named `data-pipeline` shows metrics across runs.
+- **SNS notifications** go to whatever email you passed as `alert_email`. You'll get a message when the pipeline finishes, whether it succeeded or failed.

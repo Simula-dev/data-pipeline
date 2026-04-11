@@ -1,125 +1,84 @@
 # Data Pipeline
 
-AWS CDK data pipeline — S3 → Redshift Serverless → dbt → SageMaker, orchestrated by Step Functions.
+I built this to answer a question that kept bugging me: what does a real production data pipeline actually look like? Not a tutorial that stops at "read CSV, load to database," but the full thing - ingestion, transformation, ML inference, quality gates, alerting, CI/CD, all wired together with infrastructure-as-code.
 
-> **Setup instructions:** see [SETUP.md](SETUP.md) for installing Python, Node, CDK, AWS CLI, and running tests.
->
-> **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md) for the branching strategy, commit conventions, and PR workflow.
+The result is a fully orchestrated ETL/ELT pipeline on AWS. It pulls from any REST API, lands raw data in S3, loads into PostgreSQL as jsonb, transforms through dbt on ECS Fargate, optionally runs SageMaker batch inference, validates data quality, and notifies on success or failure. One command deploys it. One command tears it down.
 
-## Build status
+For the full architecture walkthrough, see [docs/architecture.md](docs/architecture.md).
 
-| Step | Status | Module |
-|---|---|---|
-| 1. Ingest (HTTP + DataSync) | ✅ Complete | `lambdas/ingest/`, `cdk/stacks/datasync_stack.py` |
-| 2. Load to Redshift | ✅ Complete | `lambdas/load/`, `sql/setup/` |
-| 3. dbt Transformation | ✅ Complete | `dbt/`, `cdk/stacks/compute_stack.py` |
-| 4. ML Inference (SageMaker) | ✅ Complete | `ml/`, `lambdas/ml_export/`, `lambdas/ml_load/`, `cdk/stacks/sagemaker_stack.py` |
-| 5. Data Quality Gate | ✅ Complete | `lambdas/quality_gate/` |
-| 6. Notify + Finalize | ✅ Complete | `lambdas/notify/`, `cdk/stacks/monitoring_stack.py` |
+## How the pipeline flows
 
-## Stack
+Everything is orchestrated by a Step Functions state machine. When you trigger a run, it kicks off the ingest Lambda, which pulls data from whatever REST API you've configured and drops the raw JSON into S3. From there, a load Lambda picks it up and writes it into PostgreSQL's raw schema as jsonb.
+
+Once the raw data lands, dbt takes over. It runs inside a Fargate container and transforms data through three layers: staging models that parse jsonb into typed columns, intermediate models for business logic like dedup and enrichment, and mart models that produce the final analytics-ready tables. All standard dbt layering.
+
+After dbt finishes, a quality gate Lambda runs validation checks against the transformed data. If everything looks good and you've configured the ML step, SageMaker batch transform runs inference. Finally, a notification goes out via SNS - either a success summary or failure details with enough context to debug.
+
+If any step fails, the state machine short-circuits to the notification step. You get an alert with the failure details, not silence.
+
+## Tech stack
 
 | Layer | Technology |
 |---|---|
 | IaC | AWS CDK (Python) |
 | Orchestration | AWS Step Functions |
-| Warehouse | Amazon Redshift Serverless |
+| Database | Amazon RDS PostgreSQL (free tier) |
 | Object storage | S3 (raw landing zone) |
-| Transformation | dbt Core (dbt-redshift) on ECS Fargate |
-| Warehouse interaction | Redshift Data API (no JDBC/ODBC connectors required) |
-| AI / ML | AWS SageMaker (Batch Transform) |
-| CI/CD | GitHub Actions → CDK Deploy |
-| Monitoring | CloudWatch (custom metrics via EMF) + SNS |
+| Transformation | dbt Core (dbt-postgres) on ECS Fargate |
+| DB driver | pg8000 (pure Python, no Docker bundling needed) |
+| ML | AWS SageMaker (Batch Transform) |
+| CI/CD | GitHub Actions |
+| Monitoring | CloudWatch (EMF custom metrics) + SNS |
 
-> **Multi-warehouse note:** This pipeline was originally designed for Snowflake; the architecture cleanly separates the warehouse-coupled layer (~30% of the code) from the rest. Adding Snowflake back as a second target later is straightforward — see the original commit history for the Snowflake implementation.
+This pipeline went through a few warehouse iterations (Snowflake, then Redshift Serverless, then RDS PostgreSQL). The warehouse-coupled layer is roughly 30% of the codebase, cleanly separated from the rest - so swapping databases is a focused refactor, not a rewrite. The earlier implementations are in the commit history if you're curious.
 
 ## Project structure
 
 ```
-├── app.py                      # CDK entry point
-├── cdk.json                    # CDK config (set your account/region here)
-├── requirements.txt
-├── cdk/stacks/
-│   ├── ingestion_stack.py      # S3 bucket + ingest/load/quality Lambdas
-│   ├── compute_stack.py        # ECS Fargate cluster for dbt
-│   ├── stepfunctions_stack.py  # Pipeline state machine
-│   └── monitoring_stack.py     # SNS + CloudWatch dashboard
-├── lambdas/
-│   ├── ingest/                 # Raw data extraction → S3
-│   ├── quality_gate/           # Post-dbt quality checks against Snowflake
-│   └── notify/                 # Standalone notification helper
-├── dbt/
-│   ├── Dockerfile              # dbt container (push to ECR before deploy)
-│   ├── dbt_project.yml
-│   ├── profiles.yml            # Snowflake connection (env vars at runtime)
-│   └── models/
-│       ├── staging/            # Raw → cleaned views
-│       ├── intermediate/       # Business logic (ephemeral)
-│       └── marts/              # Final analytical tables
-├── ml/
-│   └── train.py                # SageMaker training script entry point
-└── .github/workflows/
-    └── deploy.yml              # Push to main → cdk deploy
+app.py                          # CDK entry point
+cdk.json                        # CDK config (account/region)
+cdk/stacks/
+    ingestion_stack.py          # S3 bucket + ingest/load/quality Lambdas
+    compute_stack.py            # ECS Fargate cluster for dbt
+    stepfunctions_stack.py      # Pipeline state machine
+    monitoring_stack.py         # SNS + CloudWatch dashboard
+lambdas/
+    ingest/                     # Raw data extraction to S3
+    quality_gate/               # Post-dbt quality checks
+    notify/                     # Notification helper
+dbt/
+    Dockerfile                  # dbt container (push to ECR before deploy)
+    models/
+        staging/                # Raw to cleaned views
+        intermediate/           # Business logic (ephemeral)
+        marts/                  # Final analytical tables
+ml/
+    train.py                    # SageMaker training entry point
+.github/workflows/
+    deploy.yml                  # Push to main triggers cdk deploy
 ```
 
-## Setup
+## Getting started
 
-### Prerequisites
+You'll need Python 3.12+, Node 18+ (for the CDK CLI), and the AWS CLI configured with credentials. If that's already set up, the quick version is:
 
 ```bash
-# Node (for CDK CLI)
-node --version   # 18+
-
-# Python
-python --version  # 3.12+
-
-# CDK CLI
-npm install -g aws-cdk
-cdk --version
-
-# Python deps
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+npm install -g aws-cdk
 ```
 
-### First deploy
+For a full walkthrough - including CDK bootstrap, database setup, and your first pipeline run - see [SETUP.md](SETUP.md).
 
-1. Set your AWS account ID in `cdk.json`
-2. Bootstrap CDK in your account (one-time):
-   ```bash
-   cdk bootstrap aws://YOUR_ACCOUNT_ID/us-east-1
-   ```
-3. Store Snowflake credentials in SSM Parameter Store:
-   ```bash
-   aws ssm put-parameter --name /data-pipeline/snowflake/account  --value "..." --type SecureString
-   aws ssm put-parameter --name /data-pipeline/snowflake/user     --value "..." --type SecureString
-   aws ssm put-parameter --name /data-pipeline/snowflake/password --value "..." --type SecureString
-   aws ssm put-parameter --name /data-pipeline/snowflake/database --value "DATA_PIPELINE" --type String
-   aws ssm put-parameter --name /data-pipeline/snowflake/warehouse --value "TRANSFORM_WH" --type String
-   aws ssm put-parameter --name /data-pipeline/snowflake/schema   --value "raw" --type String
-   ```
-4. Build and push the dbt Docker image to ECR (see `dbt/Dockerfile`)
-5. Deploy all stacks:
-   ```bash
-   cdk deploy --all --context alert_email=you@example.com
-   ```
-
-### GitHub Actions CI/CD
-
-Add these secrets to your GitHub repo:
-- `AWS_DEPLOY_ROLE_ARN` — IAM role ARN for OIDC deploy
-- `AWS_ACCOUNT_ID`
-- `ALERT_EMAIL`
-
-Push to `main` triggers automatic deploy.
-
-## Pipeline execution
-
-Trigger a pipeline run by starting a Step Functions execution:
+Once everything is deployed, trigger a pipeline run with:
 
 ```bash
 aws stepfunctions start-execution \
   --state-machine-arn arn:aws:states:us-east-1:YOUR_ACCOUNT:stateMachine:data-pipeline-orchestrator \
   --input '{"source": "my_api", "params": {}}'
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branching conventions, commit style, and PR workflow.

@@ -1,63 +1,45 @@
-# Redshift Setup
+# Database Setup
 
-Two SQL scripts to run after `cdk deploy DataPipeline-Redshift` completes.
-They're idempotent — safe to re-run.
+Two SQL scripts to run after `cdk deploy DataPipeline-RDS` completes. They're idempotent - safe to re-run.
 
-## Prerequisites
+## What you'll need
 
-- `cdk deploy` has finished and the `data-pipeline` workgroup is available
-- You have the admin password from AWS Secrets Manager:
-  `data-pipeline/redshift/admin`
+- The deploy has finished and the RDS instance is available
+- Admin credentials from Secrets Manager (`data-pipeline/rds/admin`)
 
-## Order
+## Scripts
 
 | Script | What it creates |
 |---|---|
-| `01_schemas.sql` | Schemas (raw, staging, intermediate, marts, ml), groups, grants |
-| `02_tables.sql` | `raw.landing` table, audit view, ml tables |
+| `01_schemas.sql` | Schemas (raw, staging, intermediate, marts, ml), roles, grants |
+| `02_tables.sql` | `raw.landing` table, audit view, ML tables |
 
-## Running them
+## How to run them
 
-### Option A — Redshift Query Editor v2 (easiest)
+Since the RDS instance is in a private subnet, you can't connect directly from your laptop. A few options:
 
-1. Log in to AWS Console → Redshift → Query editor v2
-2. Connect to the `data-pipeline` workgroup using admin credentials
-3. Open each SQL file, paste, run
+### Option A - Temporary admin Lambda (quickest)
 
-### Option B — psql / DBeaver
+Create a small Lambda with pg8000 in the same VPC, invoke it with the SQL statements, then delete it. This is what the initial setup used during development.
+
+### Option B - EC2 bastion host
+
+If you have a bastion/jump box in the VPC, connect through it:
 
 ```bash
-# Get admin password from Secrets Manager
+# Get the admin password from Secrets Manager
 PASSWORD=$(aws secretsmanager get-secret-value \
-    --secret-id data-pipeline/redshift/admin \
-    --query SecretString --output text | jq -r .password)
+    --secret-id data-pipeline/rds/admin \
+    --query SecretString --output text | python -c "import sys,json; print(json.loads(sys.stdin.read())['password'])")
 
-# Get the workgroup endpoint
-ENDPOINT=$(aws redshift-serverless get-workgroup \
-    --workgroup-name data-pipeline \
-    --query 'workgroup.endpoint.address' --output text)
+# Get the RDS endpoint
+ENDPOINT=$(aws rds describe-db-instances \
+    --query 'DBInstances[?DBName==`data_pipeline`].Endpoint.Address' --output text)
 
-PGPASSWORD=$PASSWORD psql -h $ENDPOINT -p 5439 -U admin -d data_pipeline -f 01_schemas.sql
-PGPASSWORD=$PASSWORD psql -h $ENDPOINT -p 5439 -U admin -d data_pipeline -f 02_tables.sql
+PGPASSWORD=$PASSWORD psql -h $ENDPOINT -p 5432 -U dbadmin -d data_pipeline -f 01_schemas.sql
+PGPASSWORD=$PASSWORD psql -h $ENDPOINT -p 5432 -U dbadmin -d data_pipeline -f 02_tables.sql
 ```
 
-Note: the workgroup is in a private subnet, so psql from your laptop won't work
-unless you use a bastion host or VPN. Use Query Editor v2 (which runs inside AWS)
-for simplicity.
+### Option C - AWS Session Manager port forwarding
 
-### Option C — Redshift Data API from your laptop (no network access needed)
-
-```bash
-aws redshift-data execute-statement \
-    --workgroup-name data-pipeline \
-    --database data_pipeline \
-    --sql "$(cat 01_schemas.sql)"
-
-aws redshift-data execute-statement \
-    --workgroup-name data-pipeline \
-    --database data_pipeline \
-    --sql "$(cat 02_tables.sql)"
-```
-
-The Data API calls go through the AWS API plane — no network path to the
-cluster needed.
+If you have SSM access to an instance in the VPC, you can forward the PostgreSQL port to localhost without a traditional bastion.

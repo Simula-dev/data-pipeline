@@ -39,14 +39,12 @@ Run `dbt build` to materialize `MARTS.ML_TRAINING_DATA`.
 
 ### 2. Unload training data to S3
 
-```sql
--- In Snowflake
-COPY INTO @RAW.S3_RAW_STAGE/ml/training/
-FROM MARTS.ML_TRAINING_DATA
-FILE_FORMAT = (TYPE = CSV FIELD_OPTIONALLY_ENCLOSED_BY = '"' COMPRESSION = NONE)
-HEADER = TRUE
-OVERWRITE = TRUE
-SINGLE = TRUE;
+The ml_export Lambda handles this for you during pipeline runs, but for initial training you can export manually. Use a temporary Lambda or script that connects to RDS and writes a CSV to S3:
+
+```python
+# Quick export via pg8000 (run from a Lambda or EC2 in the VPC)
+rows = conn.run("SELECT * FROM marts.ml_training_data")
+# Write to s3://your-bucket/ml/training/data.csv
 ```
 
 ### 3. Configure the training run
@@ -54,7 +52,7 @@ SINGLE = TRUE;
 Edit `ml/config.yaml`:
 
 ```yaml
-training_table: "MARTS.ML_TRAINING_DATA"
+training_table: "marts.ml_training_data"
 target_column: "is_popular"
 task_type: "classification"
 n_estimators: 100
@@ -94,11 +92,11 @@ aws stepfunctions start-execution \
 ## Inference workflow (inside the pipeline)
 
 ```
-dbt writes MARTS.ML_INFERENCE_INPUT
+dbt writes marts.ml_inference_input
                 │
                 ▼
      ExportMLInput Lambda
-     (Snowflake COPY INTO @stage/ml/input/<run_id>/)
+     (SELECT from PostgreSQL, write CSV to S3)
                 │
                 ▼
      SageMaker Batch Transform
@@ -106,7 +104,7 @@ dbt writes MARTS.ML_INFERENCE_INPUT
                 │
                 ▼
      LoadMLPredictions Lambda
-     (Snowflake COPY INTO MARTS.ML_PREDICTIONS)
+     (read CSV from S3, INSERT into marts.ml_predictions)
 ```
 
 ### Batch Transform vs real-time endpoint
