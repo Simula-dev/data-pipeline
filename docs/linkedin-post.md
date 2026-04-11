@@ -35,10 +35,3 @@ Live demo available — happy to walk through the running pipeline on a call.
 #DataEngineering #AWS #dbt #Python #CDK #PostgreSQL #ETL #DataPipeline
 
 ---
-
-## Posting tips
-
-1. **Add the architecture diagram as an image** (screenshot the Mermaid render from GitHub or use mermaid.live to export as PNG)
-2. **Post between Tuesday-Thursday, 8-10am your timezone** for maximum reach
-3. **Reply to your own post** within 30 minutes with a comment adding detail — this boosts the algorithm
-4. **Tag relevant people/companies** if appropriate (dbt Labs, AWS Heroes, etc.)
