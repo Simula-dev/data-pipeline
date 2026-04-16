@@ -23,6 +23,7 @@ from cdk.stacks.datasync_stack import DataSyncStack
 from cdk.stacks.sagemaker_stack import SageMakerStack
 from cdk.stacks.monitoring_stack import MonitoringStack
 from cdk.stacks.stepfunctions_stack import StepFunctionsStack
+from cdk.stacks.bastion_stack import BastionStack
 
 
 app = cdk.App()
@@ -76,6 +77,14 @@ sagemaker_stack = SageMakerStack(
 )
 
 monitoring = MonitoringStack(app, "DataPipeline-Monitoring", env=env)
+
+bastion = BastionStack(
+    app,
+    "DataPipeline-Bastion",
+    vpc=network.vpc,
+    pipeline_security_group=rds.pipeline_security_group,
+    env=env,
+)
 
 StepFunctionsStack(
     app,
