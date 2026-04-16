@@ -1,4 +1,4 @@
-# Opens an SSM port-forwarding tunnel from localhost:5432 through the bastion
+# Opens an SSM port-forwarding tunnel from localhost:5433 through the bastion
 # to the RDS endpoint. Keeps running until you Ctrl-C.
 #
 # Prerequisites:
@@ -34,13 +34,28 @@ if (-not $RdsHost -or $RdsHost -eq "None") {
 }
 Write-Host "  rds: $RdsHost"
 
+# Build the JSON parameters and write to a temp file.
+# Passing JSON directly on the command line gets mangled by PowerShell's quote handling,
+# so we use AWS CLI's file:// syntax which is bulletproof.
+$params = @{
+    host            = @($RdsHost)
+    portNumber      = @("5432")
+    localPortNumber = @("5433")
+}
+$paramsJson = $params | ConvertTo-Json -Compress
+$paramsFile = [System.IO.Path]::GetTempFileName()
+[System.IO.File]::WriteAllText($paramsFile, $paramsJson)
+
 Write-Host ""
 Write-Host "Starting SSM tunnel: localhost:5433 -> $RdsHost:5432" -ForegroundColor Green
 Write-Host "Press Ctrl-C to close the tunnel." -ForegroundColor Yellow
 Write-Host ""
 
-# Using local port 5433 so there's no conflict if you have a local Postgres install on 5432.
-aws ssm start-session `
-    --target $BastionId `
-    --document-name AWS-StartPortForwardingSessionToRemoteHost `
-    --parameters "{`"host`":[`"$RdsHost`"],`"portNumber`":[`"5432`"],`"localPortNumber`":[`"5433`"]}"
+try {
+    aws ssm start-session `
+        --target $BastionId `
+        --document-name AWS-StartPortForwardingSessionToRemoteHost `
+        --parameters "file://$paramsFile"
+} finally {
+    Remove-Item $paramsFile -ErrorAction SilentlyContinue
+}
